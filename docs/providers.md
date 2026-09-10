@@ -51,8 +51,30 @@ names, numbers, `æ/ø/å`, and language switches within a session. Include
 
 Do not store voice recordings unless the person testing explicitly agrees.
 Pitch is only enabled when the chosen TTS adapter advertises it; changing the
-playback sample rate is not a pitch-only control. Model IDs and voice IDs remain
-editable to avoid a stale hard-coded catalogue.
+playback sample rate is not a pitch-only control. Conversation model and speech
+model are stored separately because the selected assistant model may not create
+audio.
+
+## Speech model, voice, and preview behavior
+
+The embedded fallback catalogue follows the selected provider and speech model:
+
+- XiaoZhi leaves both values service-managed. Its server can use several TTS
+  implementations, so there is no truthful universal XiaoZhi voice list.
+- Gemini lists the three currently documented TTS models and 30 named voices,
+  including the provider's short voice characteristics.
+- OpenAI defaults to `gpt-4o-mini-tts` with `marin`. Its `tts-1` and `tts-1-hd`
+  choices reduce the dropdown to the smaller voice set documented for those
+  models.
+- Self-hosted leaves discovery to the future gateway adapter.
+
+The desktop simulator's Preview button uses the Web Speech API and labels the
+result as a local browser sample. It verifies preview text, language, speed,
+volume, and local pitch handling without sending credentials or pretending that
+an installed system voice is Gemini, OpenAI, or XiaoZhi. The hardware portal
+keeps the button disabled until an audio/provider adapter can generate and play
+the exact selected voice. At that point the adapter must supply the live model
+and voice catalogue and perform a short authenticated TTS request.
 
 ## Language catalogue behavior
 
@@ -64,8 +86,7 @@ international release. The visible list follows the selected route:
 - XiaoZhi uses the upstream firmware locale list. This is a device-interface
   capability; final conversation and voice availability still depends on the
   XiaoZhi service configuration.
-- Gemini uses the documented Live API catalogue by default and switches to the
-  documented TTS catalogue when the model ID contains `tts`.
+- Gemini uses the documented TTS catalogue for the separate speech model.
 - OpenAI uses the documented TTS output-language catalogue because spoken
   output is the limiting part of the planned STT + LLM + TTS chain.
 - Self-hosted shows the union of known language tags as candidates. Its future

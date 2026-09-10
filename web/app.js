@@ -34,6 +34,29 @@
   languageCatalogs.local = [...new Set([...languageCatalogs.geminiLive, ...languageCatalogs.geminiTts, ...languageCatalogs.openai, ...languageCatalogs.xiaozhi])];
   const languageNames = typeof Intl.DisplayNames === 'function' ? new Intl.DisplayNames(['en'], { type: 'language' }) : null;
   const languageFallbacks = { nb: 'Norwegian Bokmål', nn: 'Norwegian Nynorsk', no: 'Norwegian', fil: 'Filipino', cmn: 'Chinese, Mandarin', 'zh-Hant': 'Chinese, Traditional' };
+  const speechProfiles = {
+    xiaozhi: {
+      models: [['', 'Managed by XiaoZhi service']], voices: [['', 'Managed by XiaoZhi service']],
+      note: 'XiaoZhi voice choices belong to the paired server and its configured TTS provider. BitBot will request that catalogue from the XiaoZhi adapter when it is connected.',
+    },
+    gemini: {
+      defaultModel: 'gemini-3.1-flash-tts-preview', defaultVoice: 'Achird',
+      models: [['gemini-3.1-flash-tts-preview', 'Gemini 3.1 Flash TTS Preview · streaming'], ['gemini-2.5-flash-preview-tts', 'Gemini 2.5 Flash Preview TTS'], ['gemini-2.5-pro-preview-tts', 'Gemini 2.5 Pro Preview TTS']],
+      voices: [['Zephyr', 'Bright'], ['Puck', 'Upbeat'], ['Charon', 'Informative'], ['Kore', 'Firm'], ['Fenrir', 'Excitable'], ['Leda', 'Youthful'], ['Orus', 'Firm'], ['Aoede', 'Breezy'], ['Callirrhoe', 'Easy-going'], ['Autonoe', 'Bright'], ['Enceladus', 'Breathy'], ['Iapetus', 'Clear'], ['Umbriel', 'Easy-going'], ['Algieba', 'Smooth'], ['Despina', 'Smooth'], ['Erinome', 'Clear'], ['Algenib', 'Gravelly'], ['Rasalgethi', 'Informative'], ['Laomedeia', 'Upbeat'], ['Achernar', 'Soft'], ['Alnilam', 'Firm'], ['Schedar', 'Even'], ['Gacrux', 'Mature'], ['Pulcherrima', 'Forward'], ['Achird', 'Friendly'], ['Zubenelgenubi', 'Casual'], ['Vindemiatrix', 'Gentle'], ['Sadachbia', 'Lively'], ['Sadaltager', 'Knowledgeable'], ['Sulafat', 'Warm']],
+      note: '30 voices documented for Gemini TTS. The description after each name is the provider’s own voice characteristic.',
+    },
+    openai: {
+      defaultModel: 'gpt-4o-mini-tts', defaultVoice: 'marin',
+      models: [['gpt-4o-mini-tts', 'gpt-4o-mini-tts · recommended'], ['tts-1', 'tts-1 · lower latency'], ['tts-1-hd', 'tts-1-hd · higher quality']],
+      voices: ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'onyx', 'nova', 'sage', 'shimmer', 'verse', 'marin', 'cedar'].map(name => [name, ['marin', 'cedar'].includes(name) ? 'recommended for quality' : 'built-in voice']),
+      legacyVoices: ['alloy', 'ash', 'coral', 'echo', 'fable', 'onyx', 'nova', 'sage', 'shimmer'],
+      note: 'OpenAI provides 13 built-in voices for gpt-4o-mini-tts. The older tts-1 models use a smaller list; marin and cedar are the current quality recommendations.',
+    },
+    local: {
+      models: [['', 'Reported by your voice gateway']], voices: [['', 'Service default']],
+      note: 'Self-hosted gateways have no universal model or voice list. The connected adapter will replace these placeholders with the choices reported by your service.',
+    },
+  };
   let token = '', settings = null, dirty = false, busy = false, testing = false, lastJob = '', simulator = false, activePage = 'connection', pollFailures = 0, finished = false, savedNetworkCount = 0, keySaved = false;
 
   async function api(path, body) {
@@ -70,12 +93,40 @@
     $('#save-state').textContent = dirty ? 'You have unsaved preferences' : 'All changes saved';
   }
   function currentProvider() { return form.elements.provider.value; }
+  function addSelectOptions(select, entries, selected, groupLabel) {
+    select.replaceChildren();
+    const parent = groupLabel ? document.createElement('optgroup') : select;
+    if (groupLabel) parent.label = groupLabel;
+    for (const [value, label] of entries) {
+      const option = document.createElement('option'); option.value = value; option.textContent = label; parent.append(option);
+    }
+    if (groupLabel) select.append(parent);
+    if (selected && ![...select.options].some(option => option.value === selected)) {
+      const custom = document.createElement('option'); custom.value = selected; custom.textContent = `${selected} · saved custom value`; select.append(custom);
+    }
+    select.value = selected;
+  }
+  function updateVoiceOptions(resetProvider = false, preserveSavedCustom = true) {
+    const provider = currentProvider();
+    const profile = speechProfiles[provider];
+    const modelSelect = form.elements.voiceModel;
+    const voiceSelect = form.elements.voice;
+    let selectedModel = resetProvider ? profile.defaultModel || '' : modelSelect.value || settings?.voiceModel || profile.defaultModel || '';
+    addSelectOptions(modelSelect, profile.models, selectedModel, provider === 'xiaozhi' || provider === 'local' ? '' : 'Available speech models');
+    selectedModel = modelSelect.value;
+    let voices = profile.voices;
+    if (provider === 'openai' && ['tts-1', 'tts-1-hd'].includes(selectedModel)) voices = voices.filter(([name]) => profile.legacyVoices.includes(name));
+    const available = new Set(voices.map(([name]) => name));
+    let selectedVoice = resetProvider ? profile.defaultVoice || '' : voiceSelect.value || settings?.voice || profile.defaultVoice || '';
+    if (!available.has(selectedVoice) && !(preserveSavedCustom && settings?.voice === selectedVoice && !resetProvider)) selectedVoice = profile.defaultVoice && available.has(profile.defaultVoice) ? profile.defaultVoice : voices[0][0];
+    addSelectOptions(voiceSelect, voices.map(([name, description]) => [name, name ? `${name} · ${description}` : description]), selectedVoice, provider === 'xiaozhi' || provider === 'local' ? '' : 'Available voices');
+    $('#voice-help').textContent = profile.note;
+    updatePreviewSupport();
+  }
   function languageProfile() {
     const provider = currentProvider();
-    const model = form.elements.model.value.trim().toLowerCase();
     if (provider === 'xiaozhi') return { codes: languageCatalogs.xiaozhi, label: 'XiaoZhi firmware locales', note: `XiaoZhi offers ${languageCatalogs.xiaozhi.length} device locales. Spoken output also depends on the voice configured in the XiaoZhi service.` };
-    if (provider === 'gemini' && model.includes('tts')) return { codes: languageCatalogs.geminiTts, label: 'Gemini TTS languages', note: `This Gemini TTS catalog contains ${languageCatalogs.geminiTts.length} documented output languages for current TTS models.` };
-    if (provider === 'gemini') return { codes: languageCatalogs.geminiLive, label: 'Gemini Live languages', note: `Gemini Live documents ${languageCatalogs.geminiLive.length} languages. Native audio detects language automatically; the preference is supplied as an instruction.` };
+    if (provider === 'gemini') return { codes: languageCatalogs.geminiTts, label: 'Gemini TTS languages', note: `This Gemini TTS catalog contains ${languageCatalogs.geminiTts.length} documented output languages for the selected speech model.` };
     if (provider === 'openai') return { codes: languageCatalogs.openai, label: 'OpenAI speech languages', note: `OpenAI documents ${languageCatalogs.openai.length} TTS languages. Voice quality varies, and current voices are optimized for English.` };
     return { codes: languageCatalogs.local, label: 'Languages for a custom adapter', note: 'A self-hosted model has no universal language list. These common BCP-47 choices are available as preferences; the future adapter will replace them with capabilities reported by your voice gateway.' };
   }
@@ -125,6 +176,34 @@
     form.elements.pitch.disabled = provider !== 'local';
     $('#pitch-help').textContent = provider === 'local' ? 'Reserved for a self-hosted TTS adapter with pitch support. The adapter is not connected yet.' : 'Numerical pitch is unavailable for this provider. Its speech adapter may offer style instructions later.';
     $('#preview-name').textContent = form.elements.name.value.trim().toUpperCase() || 'BITBOT';
+    updatePreviewSupport();
+  }
+  function updatePreviewSupport() {
+    const button = $('#preview-voice');
+    if (!button) return;
+    const supported = simulator && 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+    button.disabled = busy || !supported;
+    $('#voice-preview-status').textContent = supported
+      ? 'Preview uses a voice installed in this browser. It lets you test the text, language, speed, pitch, and volume; it is not the selected cloud voice.'
+      : simulator ? 'This browser does not provide local speech preview.' : 'Exact voice preview will be enabled here when the selected provider and speaker adapter are connected.';
+  }
+  function previewVoice() {
+    if (!simulator || !('speechSynthesis' in window) || !('SpeechSynthesisUtterance' in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance($('#voice-preview-text').value.trim() || 'Hei! Jeg er BitBot. Nice to meet you.');
+    const language = form.elements.language.value;
+    utterance.lang = ['auto', 'auto-all'].includes(language) ? 'nb-NO' : language;
+    const candidates = window.speechSynthesis.getVoices();
+    const requested = utterance.lang.toLowerCase(); const base = requested.split('-')[0];
+    utterance.voice = candidates.find(voice => voice.lang.toLowerCase() === requested) || candidates.find(voice => voice.lang.toLowerCase().split('-')[0] === base) || null;
+    utterance.rate = Number(form.elements.speed.value);
+    utterance.volume = Number(form.elements.volume.value) / 100;
+    utterance.pitch = currentProvider() === 'local' ? Math.pow(2, Number(form.elements.pitch.value) / 12) : 1;
+    const selected = form.elements.voice.options[form.elements.voice.selectedIndex]?.textContent || 'service default';
+    utterance.onstart = () => { $('#voice-preview-status').textContent = `Playing a local browser sample. Selected provider voice: ${selected}.`; };
+    utterance.onend = () => updatePreviewSupport();
+    utterance.onerror = () => { $('#voice-preview-status').textContent = 'The browser could not play this local preview. Try another installed browser voice or device.'; };
+    window.speechSynthesis.speak(utterance);
   }
   function fillSettings(result) {
     settings = result.settings;
@@ -138,6 +217,7 @@
     keySaved = result.hasApiKey;
     updateControls();
     updateLanguageOptions();
+    updateVoiceOptions();
     setDirty(false);
   }
   function collectSettings() {
@@ -166,6 +246,7 @@
     $('#connect').disabled = value || testing;
     $('#scan').disabled = value || testing;
     $('#continue-personality').disabled = value || testing || savedNetworkCount === 0;
+    updatePreviewSupport();
   }
   function element(tag, className, content) {
     const node = document.createElement(tag);
@@ -243,6 +324,7 @@
     }
     if (status.job.state === 'connected' && lastJob !== 'connected') refreshSaved().catch(error => notice(error.message, true));
     lastJob = status.job.state;
+    updatePreviewSupport();
   }
   async function poll() {
     if (finished) return;
@@ -263,18 +345,22 @@
   $('#travel-link').addEventListener('click', () => { showPage('connection'); $('#travel-help').open = true; });
   $('.manual-network').addEventListener('toggle', event => { if (event.target.open) $('#ssid').focus(); });
   $('#scan').addEventListener('click', scan);
+  $('#preview-voice').addEventListener('click', previewVoice);
   $('#open-network').addEventListener('change', togglePassword);
   $$('[data-reveal]').forEach(button => button.addEventListener('click', () => {
     const input = document.getElementById(button.dataset.reveal); const reveal = input.type === 'password'; input.type = reveal ? 'text' : 'password'; button.textContent = reveal ? 'Hide' : 'Show'; button.setAttribute('aria-label', `${reveal ? 'Hide' : 'Show'} ${input.id === 'api-key' ? 'API key' : 'Wi-Fi password'}`);
   }));
   form.addEventListener('input', event => {
+    if (event.target.id === 'voice-preview-text') return;
     if (event.target.name === 'provider') {
       if (currentProvider() !== 'local') form.elements.pitch.value = 0;
       $('#api-key').value = ''; $('#clear-key').checked = false;
       keySaved = false;
+      updateVoiceOptions(true);
     }
     setDirty(true); updateControls();
-    if (event.target.name === 'provider' || event.target.name === 'model') updateLanguageOptions();
+    if (event.target.name === 'provider' || event.target.name === 'voiceModel') updateLanguageOptions();
+    if (event.target.name === 'voiceModel') updateVoiceOptions(false, false);
   });
   form.addEventListener('submit', async event => {
     event.preventDefault(); if (busy) return;

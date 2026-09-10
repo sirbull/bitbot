@@ -28,6 +28,9 @@ test('portable setup, persistence, safe text rendering, and responsive layout', 
   await expect(page.locator('[name="language"]')).toHaveValue('auto');
   expect(await page.locator('[name="language"] option').count()).toBeGreaterThan(35);
   await expect(page.locator('#language-support-note')).toContainText('XiaoZhi');
+  await expect(page.locator('[name="voiceModel"]')).toHaveValue('');
+  await expect(page.locator('[name="voice"]')).toHaveValue('');
+  await expect(page.locator('#voice-help')).toContainText('paired server');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: `test-results/${info.project.name}-setup.png`, fullPage: true });
 
@@ -46,10 +49,12 @@ test('portable setup, persistence, safe text rendering, and responsive layout', 
   await page.locator('[name="provider"][value="gemini"]').check();
   await expect(page.locator('#provider-fields')).toBeVisible();
   await expect(page.locator('#key-status')).toHaveText('Required to use');
-  expect(await page.locator('[name="language"] option').count()).toBeGreaterThan(90);
-  await expect(page.locator('#language-support-note')).toContainText('Gemini Live');
-  await page.locator('[name="model"]').fill('gemini-2.5-flash-preview-tts');
+  await expect(page.locator('[name="voiceModel"]')).toHaveValue('gemini-3.1-flash-tts-preview');
+  await expect(page.locator('[name="voice"]')).toHaveValue('Achird');
+  expect(await page.locator('[name="voice"] option').count()).toBe(30);
+  expect(await page.locator('[name="language"] option').count()).toBeGreaterThan(75);
   await expect(page.locator('#language-support-note')).toContainText('Gemini TTS catalog');
+  await page.locator('[name="model"]').fill('gemini-2.5-flash-preview-tts');
   await page.locator('[name="language"]').selectOption('sv');
   await page.locator('#api-key').fill('dummy-browser-key');
   await page.getByRole('button', { name: /Save preferences/ }).click();
@@ -60,6 +65,8 @@ test('portable setup, persistence, safe text rendering, and responsive layout', 
   await expect(page.locator('[name="name"]')).toHaveValue('Blåbær');
   await expect(page.locator('#key-status')).toHaveText('Saved');
   await expect(page.locator('[name="language"]')).toHaveValue('sv');
+  await expect(page.locator('[name="voiceModel"]')).toHaveValue('gemini-3.1-flash-tts-preview');
+  await expect(page.locator('[name="voice"]')).toHaveValue('Achird');
   expect(await page.evaluate(() => localStorage.length)).toBe(0);
 
   await page.getByRole('button', { name: /Voice & language/ }).click();
@@ -79,6 +86,38 @@ test('portable setup, persistence, safe text rendering, and responsive layout', 
   await page.getByRole('button', { name: 'Forget network', exact: true }).click();
   await expect(page.locator('#saved-networks')).not.toContainText(ssid);
   expect(errors).toEqual([]); expect(external).toEqual([]);
+});
+
+test('voice catalogue follows the provider and speech model, with an honest local preview', async ({ page }) => {
+  await page.addInitScript(() => {
+    class PreviewUtterance {
+      constructor(text) { this.text = text; }
+    }
+    Object.defineProperty(window, 'SpeechSynthesisUtterance', { configurable: true, value: PreviewUtterance });
+    Object.defineProperty(window, 'speechSynthesis', { configurable: true, value: {
+      cancel() {}, getVoices() { return [{ name: 'Test Norwegian', lang: 'nb-NO' }]; },
+      speak(utterance) { window.__bitbotPreview = { text: utterance.text, lang: utterance.lang, rate: utterance.rate, volume: utterance.volume, voice: utterance.voice?.name }; utterance.onstart?.(); },
+    } });
+  });
+  await page.goto('/');
+  await page.locator('[name="provider"][value="openai"]').check();
+  await expect(page.locator('[name="voiceModel"]')).toHaveValue('gpt-4o-mini-tts');
+  await expect(page.locator('[name="voice"]')).toHaveValue('marin');
+  expect(await page.locator('[name="voice"] option').count()).toBe(13);
+  await page.getByRole('button', { name: /Save preferences/ }).click();
+  await expect(page.locator('#notice')).toContainText('Preferences saved');
+  await page.reload();
+  await expect(page.locator('[name="voice"]')).toHaveValue('marin');
+  await page.locator('[name="voiceModel"]').selectOption('tts-1');
+  expect(await page.locator('[name="voice"] option').count()).toBe(9);
+  await expect(page.locator('[name="voice"]')).toHaveValue('alloy');
+  await page.getByRole('button', { name: /Save preferences/ }).click();
+  await expect(page.locator('#save-state')).toHaveText('All changes saved');
+  await page.locator('#voice-preview-text').fill('Hei fra BitBot!');
+  await expect(page.locator('#save-state')).toHaveText('All changes saved');
+  await page.locator('#preview-voice').click();
+  await expect(page.locator('#voice-preview-status')).toContainText('local browser sample');
+  expect(await page.evaluate(() => window.__bitbotPreview)).toEqual({ text: 'Hei fra BitBot!', lang: 'nb-NO', rate: 1, volume: 0.5, voice: 'Test Norwegian' });
 });
 
 test('failed connection and validation errors keep settings editable', async ({ page }) => {

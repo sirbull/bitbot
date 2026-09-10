@@ -24,6 +24,14 @@ test('provider keys stay separate; clearing one never removes the others', () =>
   assert.throws(() => updateDocument(doc, { settings: {}, apiKey: 'new', clearApiKey: true }));
 });
 
+test('simulator adds newly introduced defaults to an older saved document', () => {
+  const document = initialDocument();
+  delete document.settings.voiceModel;
+  const bot = new Simulator({ document });
+  assert.equal(bot.settings().settings.voiceModel, '');
+  assert.deepEqual(Object.keys(bot.settings().settings), Object.keys(defaults()));
+});
+
 test('server enforces byte limits, type limits, URLs, and capabilities', () => {
   const invalid = [{ name: ' ' }, { name: 'å'.repeat(25) }, { volume: 101 }, { volume: '50' }, { idleSeconds: 15.5 }, { captions: 'true' }, { provider: 'invented' }, { language: 'en_US' }, { language: '../en' }, { pitch: 2 }, { endpoint: 'javascript:alert(1)' }, { endpoint: 'https://key:secret@example.com' }, { endpoint: 'https://example.com?key=secret' }, { endpoint: 'http://example.com' }, { unknown: 5 }, { name: 'a\0b' }];
   for (const patch of invalid) assert.throws(() => validateSettings(patch), JSON.stringify(patch));
@@ -31,6 +39,7 @@ test('server enforces byte limits, type limits, URLs, and capabilities', () => {
   assert.equal(validateSettings({ language: 'pt-BR' }).language, 'pt-BR');
   assert.equal(validateSettings({ language: 'zh-Hant-TW' }).language, 'zh-Hant-TW');
   assert.equal(validateSettings({ language: 'auto-all' }).language, 'auto-all');
+  assert.equal(validateSettings({ voiceModel: 'gpt-4o-mini-tts', voice: 'marin' }).voiceModel, 'gpt-4o-mini-tts');
   assert.deepEqual(validateSettings({}), defaults());
 });
 

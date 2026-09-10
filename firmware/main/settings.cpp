@@ -144,15 +144,22 @@ bool LoadSettings() {
     if (result != ESP_OK) return false;
     Json doc(cJSON_Parse(content.c_str()));
     const auto* version = cJSON_GetObjectItemCaseSensitive(doc.value, "schemaVersion");
-    const auto* settings = cJSON_GetObjectItemCaseSensitive(doc.value, "settings");
+    auto* settings = cJSON_GetObjectItemCaseSensitive(doc.value, "settings");
     const auto* networks = cJSON_GetObjectItemCaseSensitive(doc.value, "networks");
     const auto* keys = cJSON_GetObjectItemCaseSensitive(doc.value, "keys");
     std::string error;
     if (!cJSON_IsNumber(version) || version->valuedouble != 1 || !ValidateSettings(settings, error) || !cJSON_IsArray(networks) || cJSON_GetArraySize(networks) > 5 || !cJSON_IsObject(keys) || strlen(Text(doc.value, "setupPassword")) != 16) return false;
     Json defaults(cJSON_Parse(kDefaults));
-    for (auto* item = defaults.value->child; item; item = item->next) if (!cJSON_GetObjectItemCaseSensitive(settings, item->string)) return false;
+    bool migrated = false;
+    for (auto* item = defaults.value->child; item; item = item->next) {
+        if (!cJSON_GetObjectItemCaseSensitive(settings, item->string)) {
+            cJSON_AddItemToObject(settings, item->string, cJSON_Duplicate(item, true));
+            migrated = true;
+        }
+    }
     for (const auto* network = networks->child; network; network = network->next) { Network parsed; if (!ValidateNetwork(network, parsed, error)) return false; }
     for (const auto* key = keys->child; key; key = key->next) if (!cJSON_IsString(key) || strlen(key->valuestring) > 256) return false;
+    if (migrated) return Commit(doc.value);
     shared.document = cJSON_Duplicate(doc.value, true);
     return shared.document != nullptr;
 }

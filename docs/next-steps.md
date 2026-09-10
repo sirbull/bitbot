@@ -64,8 +64,9 @@ results here when hardware is available; do not label them tested in advance.
   backlight dimming, NTP/local tools, or battery sampling yet.
 - The physical setup password is output to the USB console for bring-up; screen
   presentation and a polished no-computer first-boot experience are next.
-- Endpoint validation does not prove an endpoint is compatible/reachable. No
-  provider connection tester or automatic model/voice catalogue exists yet.
+- Endpoint validation does not prove an endpoint is compatible/reachable. The
+  bundled speech model and voice lists are documented fallbacks; provider
+  connection testing and live catalogue discovery do not exist yet.
 - The hosted service options are candidates, not measured recommendations.
 - Firmware and simulator have separate native storage/network implementations;
   shared schema and UI reduce drift but do not replace physical integration tests.

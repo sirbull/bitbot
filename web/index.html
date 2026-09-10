@@ -96,12 +96,22 @@
 
             <section class="setup-step" data-panel="voice" aria-labelledby="voice-title">
               <div class="section-heading"><div><div class="eyebrow">03 / FIND ITS VOICE</div><h2 id="voice-title" tabindex="-1">Sounds like your BitBot.</h2></div></div>
-              <p class="section-intro">Choose how your companion should handle language. The available choices follow the selected AI and speech route.</p>
-              <p class="integration-note">These are saved preferences. This build does not yet record or play audio.</p>
+              <p class="section-intro">Choose how your companion should handle language and speech. The available models and voices follow the AI provider selected above.</p>
+              <p class="integration-note">The desktop simulator can play a clearly labelled sample with a voice installed on this computer. Exact provider previews will use the robot's speech adapter when audio is integrated.</p>
               <label>Preferred conversation language<select name="language" aria-describedby="language-hint language-support-note"><option value="auto">Automatic · Norwegian + English</option><option value="auto-all">Automatic · any supported language</option></select></label>
               <p class="hint" id="language-hint">The default detects Norwegian and English. Choose another language to prefer it, or allow automatic switching across every language supported by the selected route. The setup page stays in English.</p>
               <p class="language-support" id="language-support-note"></p>
-              <label>Voice ID <span class="optional">optional</span><input name="voice" maxlength="80" placeholder="Use the selected speech service's default"></label><p class="hint">Voice names depend on the speech provider. Availability will be checked when the adapter is connected.</p>
+              <div class="voice-grid">
+                <label>Speech model<select name="voiceModel" id="voice-model" aria-describedby="voice-model-help"><option value="">Managed by the selected service</option></select></label>
+                <label>Voice<select name="voice" id="voice-select" aria-describedby="voice-help"><option value="">Managed by the selected service</option></select></label>
+              </div>
+              <p class="hint" id="voice-model-help">The speech model reads the assistant's answer aloud. It can be different from the conversation model selected above.</p>
+              <p class="voice-support" id="voice-help"></p>
+              <div class="voice-preview">
+                <label>Preview text <span class="optional">not saved</span><input id="voice-preview-text" maxlength="160" value="Hei! Jeg er BitBot. Nice to meet you."></label>
+                <button class="button" id="preview-voice" type="button"><span aria-hidden="true">&#9654;</span> Preview voice</button>
+              </div>
+              <p class="hint preview-status" id="voice-preview-status" role="status">Loading preview support…</p>
               <label class="range-label">Speaker volume<output id="volume-output"></output><input name="volume" type="range" min="0" max="100" step="1"></label>
               <label class="range-label">Speaking speed<output id="speed-output"></output><input name="speed" type="range" min="0.75" max="1.25" step="0.05"></label>
               <label class="range-label">Voice pitch<output id="pitch-output"></output><input name="pitch" type="range" min="-6" max="6" step="1"></label><p class="hint" id="pitch-help">Pitch requires a self-hosted speech adapter that supports it.</p>
