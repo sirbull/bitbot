@@ -1,0 +1,15 @@
+node_modules/
+.local/
+dist/
+test-results/
+playwright-report/
+firmware/build/
+firmware/managed_components/
+firmware/sdkconfig
+firmware/sdkconfig.old
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+

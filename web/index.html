@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#e8e8e2">
+  <title>BitBot — Make it yours</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to settings</a>
+  <div class="page-frame">
+    <header class="header">
+      <a class="brand" href="/" aria-label="BitBot home"><span class="brand-face" aria-hidden="true"><i></i><i></i></span>bitbot<span class="brand-dot">.</span></a>
+      <span class="header-label mono">A LITTLE ROBOT. YOUR KIND OF MIND.</span>
+      <span class="connection-badge" id="connection-badge"><span class="status-dot"></span><span id="connection-label">Connecting to device</span></span>
+    </header>
+
+    <div class="demo-banner" id="demo-banner" hidden><span class="mono">DESKTOP SIMULATOR</span> Explore the setup with dummy credentials. Wi-Fi and hardware are simulated.</div>
+
+    <main id="main">
+      <section class="hero" aria-labelledby="page-title">
+        <div class="hero-copy">
+          <div class="eyebrow"><span class="square"></span>BITBOT / DEVICE SETUP</div>
+          <h1 id="page-title">Small robot.<br><span>Your personality.</span></h1>
+          <p>Give your companion a connection, a voice, and a little character. Make it feel like yours.</p>
+          <div class="hero-tags"><span>NORWEGIAN + ENGLISH</span><span>MADE TO GO WITH YOU</span></div>
+        </div>
+        <div class="companion-card">
+          <div class="companion-top mono"><span>MEET <span id="preview-name">BITBOT</span></span><span class="live-dot" aria-hidden="true"></span></div>
+          <div class="robot" id="robot" aria-label="BitBot face preview"><div class="antenna"></div><div class="robot-screen"><div class="eyes"><i></i><i></i></div><div class="mouth"></div><div class="face-caption" id="face-caption">Hello, world.</div></div><div class="robot-feet"><i></i><i></i></div></div>
+          <div class="companion-bottom"><span class="mono">A LITTLE CURIOUS BY DEFAULT</span><button id="greet" class="text-button" type="button">Say hello <span aria-hidden="true">↗</span></button></div>
+        </div>
+      </section>
+
+      <div class="workspace">
+        <aside class="sidebar">
+          <p class="eyebrow">MAKE YOURSELF AT HOME</p>
+          <nav aria-label="Settings sections" class="section-nav">
+            <button class="nav-item active" data-page="connection" aria-current="page"><span class="nav-number">01</span>Connection<span class="nav-arrow" aria-hidden="true">↗</span></button>
+            <button class="nav-item" data-page="personality"><span class="nav-number">02</span>Mind & personality<span class="nav-arrow" aria-hidden="true">↗</span></button>
+            <button class="nav-item" data-page="voice"><span class="nav-number">03</span>Voice & language<span class="nav-arrow" aria-hidden="true">↗</span></button>
+            <button class="nav-item" data-page="device"><span class="nav-number">04</span>Device<span class="nav-arrow" aria-hidden="true">↗</span></button>
+          </nav>
+          <div class="travel-note"><span class="small-icon" aria-hidden="true">↗</span><h3>A new place?<br>Same little companion.</h3><p>Hold BOOT for 3 seconds after switching on to open setup again. Change Wi-Fi and keep everything else.</p><a href="#travel-help" id="travel-link">How it works <span aria-hidden="true">→</span></a></div>
+          <div class="local-note"><span class="square"></span><span>This page lives on your robot.<br>No internet needed for setup.</span></div>
+        </aside>
+
+        <div class="settings-area">
+          <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+          <section data-panel="connection" aria-labelledby="connection-title">
+            <div class="section-heading"><div><div class="eyebrow">01 / GET CONNECTED</div><h2 id="connection-title" tabindex="-1">First, a place to connect.</h2></div><span class="step-tag mono">2.4 GHz WI-FI</span></div>
+            <p class="section-intro">Choose a network for BitBot. Your saved networks travel with you, so coming home is automatic.</p>
+
+            <div class="network-summary"><span class="wifi-symbol" aria-hidden="true">◉</span><div><strong id="network-title">Ready for a connection</strong><p id="network-detail">Connect to Wi-Fi to get started.</p></div><span id="network-state" class="mini-badge">SETUP</span></div>
+            <div class="list-heading"><h3>Nearby networks</h3><button id="scan" class="text-button" type="button">↻ Scan again</button></div>
+            <p class="hint" id="scan-hint">Choose a network below, or enter a hidden network manually.</p>
+            <div id="network-list" class="network-list" aria-live="polite"></div>
+            <details class="manual-network"><summary>Enter a network manually</summary><p class="hint">Use this for a hidden 2.4 GHz network. Enterprise sign-in is not supported.</p></details>
+            <form id="network-form" class="network-form">
+              <div class="field-row"><label>Network name<input name="ssid" id="ssid" required maxlength="32" autocomplete="off" placeholder="Choose or type a network name"></label><label>Wi-Fi password<div class="password-field"><input name="password" id="wifi-password" type="password" maxlength="64" autocomplete="new-password" placeholder="Your network password"><button type="button" class="reveal" data-reveal="wifi-password" aria-label="Show Wi-Fi password">Show</button></div></label></div>
+              <label class="checkbox-label"><input id="open-network" type="checkbox">This network has no password</label>
+              <div class="form-action"><p class="hint">Your existing networks stay saved if the connection fails.</p><button class="button primary" id="connect" type="submit">Connect & save <span aria-hidden="true">↗</span></button></div>
+            </form>
+            <div id="connection-result" class="connection-result" role="status" hidden></div>
+            <div class="saved-section"><div class="list-heading"><h3>Saved networks</h3><span class="mono muted" id="saved-count">0 / 5</span></div><div id="saved-networks"><p class="hint">No networks saved yet.</p></div></div>
+            <details id="travel-help" class="help-box"><summary>Taking BitBot somewhere new</summary><ol><li>Switch on, then hold the onboard <strong>BOOT</strong> button for 3 seconds. RESET just restarts the robot.</li><li>Join the <strong>BitBot-XXXX</strong> hotspot with its setup password. For this first firmware, find it on USB serial.</li><li>Open <strong>http://192.168.4.1</strong> if setup does not open automatically. Stay on the hotspot even if your phone reports no internet.</li><li>Add the new Wi-Fi, then choose <strong>Finish setup</strong>. Your personality and other networks stay saved.</li></ol><p>A 2.4 GHz phone hotspot also works. Hotel login pages and enterprise Wi-Fi need a different connection method.</p></details>
+          </section>
+
+          <form id="settings-form">
+            <section data-panel="personality" aria-labelledby="personality-title" hidden>
+              <div class="section-heading"><div><div class="eyebrow">02 / A MIND OF ITS OWN</div><h2 id="personality-title" tabindex="-1">Give it some character.</h2></div></div>
+              <p class="section-intro">A thoughtful sidekick, a cheerful storyteller, or a very serious little scientist. You decide.</p>
+              <p class="integration-note">Preferences are saved on the device. AI conversation is part of the next development milestone.</p>
+              <label>Companion name<input name="name" maxlength="48" required></label>
+              <label>Personality<textarea name="personality" rows="6" maxlength="2000" aria-describedby="personality-hint"></textarea></label><p class="hint" id="personality-hint">Describe its tone, interests, and how it should answer. Norwegian or English is fine.</p>
+              <div class="field-heading"><h3>Choose its AI</h3><span class="mono muted">CHANGE ANYTIME</span></div>
+              <div class="provider-grid" role="group" aria-label="AI provider">
+                <label class="provider-card"><input type="radio" name="provider" value="gemini"><span class="provider-top">Gemini<span class="provider-mark">G</span></span><span class="provider-caption">Limited free tiers available</span></label>
+                <label class="provider-card"><input type="radio" name="provider" value="openai"><span class="provider-top">OpenAI<span class="provider-mark">◎</span></span><span class="provider-caption">Usage-based cloud API</span></label>
+                <label class="provider-card"><input type="radio" name="provider" value="local"><span class="provider-top">Self-hosted<span class="provider-mark">⌂</span></span><span class="provider-caption">Your computer or server</span></label>
+                <label class="provider-card"><input type="radio" name="provider" value="xiaozhi"><span class="provider-top">XiaoZhi<span class="provider-mark">✳</span></span><span class="provider-caption">Managed assistant service</span></label>
+              </div>
+              <p id="provider-help" class="hint"></p>
+              <div class="field-row"><label>Model ID<input name="model" maxlength="120" placeholder="Enter a model supported by your service" autocomplete="off"></label><label>Service URL <span class="optional">optional</span><input name="endpoint" maxlength="240" placeholder="https://your-service.example" autocomplete="off" spellcheck="false"></label></div>
+              <label>API key <span class="optional" id="key-status">optional during setup</span><div class="password-field"><input id="api-key" type="password" maxlength="256" autocomplete="new-password" placeholder="Leave blank to keep the saved key"><button type="button" class="reveal" data-reveal="api-key" aria-label="Show API key">Show</button></div></label>
+              <label class="checkbox-label"><input id="clear-key" type="checkbox">Remove the saved key for the selected provider</label>
+              <p class="hint">Keys are kept per provider and never returned by the settings API. Use dummy keys in the desktop simulator.</p>
+            </section>
+
+            <section data-panel="voice" aria-labelledby="voice-title" hidden>
+              <div class="section-heading"><div><div class="eyebrow">03 / FIND ITS VOICE</div><h2 id="voice-title" tabindex="-1">Sounds like your BitBot.</h2></div></div>
+              <p class="section-intro">Make room for both languages. Adjust how your companion will speak when the audio integration is ready.</p>
+              <p class="integration-note">These are saved preferences. This build does not yet record or play audio.</p>
+              <label>Conversation language<select name="language"><option value="auto">Automatic · Norwegian & English</option><option value="nb">Prefer Norwegian</option><option value="en">Prefer English</option></select></label>
+              <p class="hint">Automatic asks BitBot to reply in the language you use. The setup page stays in English.</p>
+              <label>Voice ID <span class="optional">optional</span><input name="voice" maxlength="80" placeholder="Use the selected speech service's default"></label><p class="hint">Voice names depend on the speech provider. Availability will be checked when the adapter is connected.</p>
+              <label class="range-label">Speaker volume<output id="volume-output"></output><input name="volume" type="range" min="0" max="100" step="1"></label>
+              <label class="range-label">Speaking speed<output id="speed-output"></output><input name="speed" type="range" min="0.75" max="1.25" step="0.05"></label>
+              <label class="range-label">Voice pitch<output id="pitch-output"></output><input name="pitch" type="range" min="-6" max="6" step="1"></label><p class="hint" id="pitch-help">Pitch requires a self-hosted speech adapter that supports it.</p>
+              <label class="checkbox-label"><input name="captions" type="checkbox">Show captions while speaking</label><p class="hint">The planned display uses the same response text as speech, including Norwegian characters.</p>
+            </section>
+
+            <section data-panel="device" aria-labelledby="device-title" hidden>
+              <div class="section-heading"><div><div class="eyebrow">04 / THE LITTLE DETAILS</div><h2 id="device-title" tabindex="-1">Ready for everyday life.</h2></div></div>
+              <p class="section-intro">A few finishing touches for your portable companion.</p>
+              <p class="integration-note">Display and idle preferences are stored for the hardware integration. Battery runtime has not been measured.</p>
+              <label class="range-label">Display brightness<output id="brightness-output"></output><input name="brightness" type="range" min="10" max="100" step="1"></label>
+              <label>Return to idle after<select name="idleSeconds"><option value="15">15 seconds</option><option value="30">30 seconds</option><option value="60">1 minute</option><option value="120">2 minutes</option><option value="300">5 minutes</option></select></label><p class="hint">Idle is a future low-power state, not deep sleep with voice detection.</p>
+              <div class="device-facts"><div><span>Hardware target</span><strong>XIAO ESP32-S3 Sense</strong></div><div><span>Firmware</span><strong id="firmware-version">—</strong></div><div><span>Camera</span><strong>Inactive · not integrated</strong></div><div><span>Microphone</span><strong>Inactive · not integrated</strong></div><div><span>Battery</span><strong>Measurement not available</strong></div><div><span>Setup access</span><strong>Hold BOOT for 3 seconds</strong></div></div>
+              <details class="help-box"><summary>Where are my settings stored?</summary><p>On the robot, settings and credentials are stored in its flash. This development build does not yet encrypt flash storage. The setup hotspot is password-protected and closes when setup is finished.</p><p>In the desktop simulator, data is saved locally on this computer. No cloud service is called. Use dummy passwords and API keys.</p></details>
+            </section>
+
+            <div class="save-bar" id="save-bar" hidden><span class="hint" id="save-state">All changes saved</span><button type="submit" class="button dark" id="save-settings">Save preferences <span aria-hidden="true">↗</span></button></div>
+          </form>
+          <div class="finish-bar"><div><strong>All set?</strong><p>Finish setup to restart BitBot with your saved preferences.</p></div><button class="button primary" id="finish" type="button">Finish setup <span aria-hidden="true">→</span></button></div>
+        </div>
+      </div>
+    </main>
+    <footer><span class="brand-small">bitbot.</span><span class="mono">SMALL HARDWARE. A LITTLE PERSONALITY.</span><span class="mono">PROJECT 001 / V0.1</span></footer>
+  </div>
+  <dialog id="confirm-dialog"><div class="eyebrow">SAVED NETWORK</div><h2>Forget this network?</h2><p id="confirm-text"></p><p class="hint">Your other networks and assistant preferences will stay saved.</p><div class="dialog-actions"><button class="button" id="cancel-forget">Keep network</button><button class="button dark" id="confirm-forget">Forget network</button></div></dialog>
+</body>
+</html>
