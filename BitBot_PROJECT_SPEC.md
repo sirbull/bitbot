@@ -107,10 +107,15 @@ Known characteristics:
     -   VCC
     -   SCL / SCK
     -   SDA / MOSI
-    -   RST
+    -   RES / RST
     -   DC
-    -   CS
-    -   BL
+    -   BLK / BL
+
+Owner-confirmed on 2026-09-10: with the pins at the top, the left-to-right
+order is **GND, VCC, SCK, SDA, RES, DC, BLK**. This module has **no CS pin**.
+Use ST7789 SPI support with chip-select disabled and exclusive bus ownership.
+Do not use an SD card on that SPI bus. See `docs/hardware.md` for the current
+signal allocation and unverified supply/backlight requirements.
 
 Important:
 

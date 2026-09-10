@@ -1,4 +1,5 @@
 #include "bitbot.h"
+#include "display.h"
 #include "generated/portal_assets.h"
 #include <algorithm>
 #include <cstring>
@@ -70,7 +71,8 @@ static esp_err_t Get(httpd_req_t* req, const std::string& uri) {
         auto* job = cJSON_AddObjectToObject(value.value, "job");
         cJSON_AddStringToObject(job, "state", shared.job.c_str()); cJSON_AddStringToObject(job, "message", shared.message.c_str());
         auto* caps = cJSON_AddObjectToObject(value.value, "capabilities");
-        for (const char* key : {"assistant", "audio", "camera", "display"}) cJSON_AddBoolToObject(caps, key, false);
+        for (const char* key : {"assistant", "audio", "camera"}) cJSON_AddBoolToObject(caps, key, false);
+        cJSON_AddBoolToObject(caps, "display", DisplayReady());
         return Send(req, value.value);
     }
     if (uri == "/api/scan") {

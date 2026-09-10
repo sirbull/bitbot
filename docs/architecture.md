@@ -103,6 +103,12 @@ The simulator never joins networks or invokes a paid API.
 
 ## Memory, power, and remaining risks
 
+Update 2026-09-10: the owner confirmed a seven-pin ST7789 with no CS. An optional
+native `esp_lcd` bring-up driver now uses that interface; see `hardware.md` for
+the exact pin list and remaining supply/backlight checks. It uses a 7,680-byte
+DMA stripe buffer and waits for transfer completion before reuse. It is disabled
+by default, so external wiring is not energized just by flashing commissioning.
+
 The target is the original XIAO ESP32-S3 Sense (8 MB flash, 8 MB PSRAM), not a
 Plus variant. Confirm the installed board and sensor. Commissioning keeps the
 web assets compressed in flash and limits requests to 12 KiB. A 240×240 RGB565

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import { createServer } from '../tools/dev-server.mjs';
 import { Simulator } from '../lib/simulator.mjs';
 
@@ -12,7 +13,11 @@ test('HTTP API rejects foreign origins, missing tokens, malformed/oversized requ
   const send = (body, extra = {}) => fetch(`${url}/api/settings`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-BitBot-Token': bot.sessionToken, ...extra }, body: typeof body === 'string' ? body : JSON.stringify(body) });
   assert.equal((await send({ settings: {} }, { Origin: 'https://foreign.example' })).status, 403);
   assert.equal((await send({ settings: {} }, { 'X-BitBot-Token': 'wrong' })).status, 403);
-  assert.equal((await send({ settings: {} }, { Host: 'foreign.example' })).status, 403);
+  // fetch controls Host itself; use a raw HTTP request to test DNS-rebinding protection.
+  const foreignHostStatus = await new Promise((resolve, reject) => {
+    http.get(url, { headers: { Host: 'foreign.example' } }, response => { response.resume(); resolve(response.statusCode); }).on('error', reject);
+  });
+  assert.equal(foreignHostStatus, 403);
   assert.equal((await send({ settings: {} }, { 'Content-Type': 'text/plain' })).status, 415);
   assert.equal((await send('{bad json')).status, 400);
   assert.equal((await send('x'.repeat(13000))).status, 413);

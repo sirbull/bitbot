@@ -86,6 +86,8 @@
   }
   function setBusy(value) {
     busy = value;
+    form.inert = value;
+    $('#network-form').inert = value;
     $('#save-settings').disabled = value;
     $('#finish').disabled = value || testing;
     $('#connect').disabled = value || testing;

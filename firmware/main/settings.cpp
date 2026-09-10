@@ -84,7 +84,7 @@ bool ValidateNetwork(const cJSON* input, Network& network, std::string& error) {
     const auto* password = cJSON_GetObjectItemCaseSensitive(input, "password");
     const auto* open = cJSON_GetObjectItemCaseSensitive(input, "open");
     if (!cJSON_IsString(ssid) || !PlainText(ssid->valuestring, false) || !strlen(ssid->valuestring) || strlen(ssid->valuestring) > 32 || (password && !cJSON_IsString(password)) || (open && !cJSON_IsBool(open))) { error = "Invalid network name or password."; return false; }
-    network = {ssid->valuestring, Text(input, "password"), cJSON_IsTrue(open)};
+    network = {ssid->valuestring, Text(input, "password"), cJSON_IsTrue(open) != 0};
     bool valid = network.open ? network.password.empty() : network.password.size() >= 8 && network.password.size() <= 64;
     for (unsigned char ch : network.password) {
         if (ch < 32 || ch > 126 || (network.password.size() == 64 && !std::isxdigit(ch))) valid = false;

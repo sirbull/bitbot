@@ -1,4 +1,5 @@
 #include "bitbot.h"
+#include "display.h"
 #include <driver/gpio.h>
 #include <esp_log.h>
 #include <esp_system.h>
@@ -18,6 +19,7 @@ extern "C" void app_main() {
     ESP_ERROR_CHECK(gpio_config(&button));
     ESP_LOGI("bitbot", "Commissioning 0.1.0; free heap %u; free PSRAM %u", static_cast<unsigned>(esp_get_free_heap_size()), static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
     InitNetwork();
+    InitDisplay();
     if (cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(shared.document, "networks")) == 0) OpenSetup();
     int64_t pressed_at = 0;
     bool handled = false;
@@ -28,6 +30,9 @@ extern "C" void app_main() {
             if (!handled && NowMs() - pressed_at >= 3000) { OpenSetup(); handled = true; }
         } else { pressed_at = 0; handled = false; }
         TickNetwork();
+        State state;
+        { std::lock_guard<std::mutex> lock(shared.mutex); state = shared.state; }
+        TickDisplay(state);
         bool restart;
         { std::lock_guard<std::mutex> lock(shared.mutex); restart = shared.restart_at && NowMs() >= shared.restart_at; }
         if (restart) esp_restart();

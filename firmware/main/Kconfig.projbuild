@@ -1,0 +1,19 @@
+menu "BitBot hardware bring-up"
+    config BITBOT_DISPLAY_ENABLED
+        bool "Enable verified 7-pin ST7789 240x240 display wiring"
+        default n
+        help
+            No CS pin. SCK=D8/GPIO7, SDA=D10/GPIO9, RES=D1/GPIO2,
+            DC=D4/GPIO5. No SD card may be inserted or initialized.
+            Verify VCC and BLK power wiring first; BLK is not GPIO-driven.
+    config BITBOT_DISPLAY_INVERT
+        bool "Invert panel colors"
+        default y
+    config BITBOT_DISPLAY_BGR
+        bool "Use BGR color order"
+        default n
+    config BITBOT_DISPLAY_Y_GAP
+        int "Panel row offset (verify on the actual module)"
+        range 0 80
+        default 0
+endmenu

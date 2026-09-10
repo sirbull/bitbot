@@ -153,7 +153,7 @@ void TickNetwork() {
             int count = cJSON_GetArraySize(networks);
             if (count && profile_index < count) {
                 const auto* item = cJSON_GetArrayItem(networks, profile_index++);
-                next = {Text(item, "ssid"), Text(item, "password"), cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(item, "open"))};
+                next = {Text(item, "ssid"), Text(item, "password"), cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(item, "open")) != 0};
                 available = true; shared.state = State::Connecting;
             } else {
                 profile_index = 0; retry_at = NowMs() + retry_seconds * 1000;

@@ -1,4 +1,14 @@
 import { test, expect } from '@playwright/test';
+import { defaults } from '../../lib/settings.mjs';
+
+test.beforeEach(async ({ request }) => {
+  const { token } = await (await request.get('/api/session')).json();
+  const headers = { 'X-BitBot-Token': token };
+  for (const network of await (await request.get('/api/networks')).json()) {
+    await request.post('/api/forget', { headers, data: { ssid: network.ssid } });
+  }
+  await request.post('/api/settings', { headers, data: { settings: defaults(), clearApiKey: true } });
+});
 
 test('portable setup, persistence, safe text rendering, and responsive layout', async ({ page }, info) => {
   const errors = [], external = [];
@@ -40,7 +50,7 @@ test('portable setup, persistence, safe text rendering, and responsive layout', 
   await page.getByRole('button', { name: /Finish setup/ }).click();
   await expect(page.locator('#notice')).toContainText('Simulator restarted');
 
-  await page.getByRole('button', { name: /01Connection/ }).click();
+  await page.locator('[data-page="connection"]').click();
   await page.getByRole('button', { name: `Forget ${ssid}`, exact: true }).click();
   await page.getByRole('button', { name: 'Keep network' }).click();
   await expect(page.locator('#saved-networks')).toContainText(ssid);
