@@ -7,6 +7,9 @@ test.beforeEach(async ({ request }) => {
   for (const network of await (await request.get('/api/networks')).json()) {
     await request.post('/api/forget', { headers, data: { ssid: network.ssid } });
   }
+  for (const provider of ['xiaozhi', 'gemini', 'openai', 'local']) {
+    await request.post('/api/settings', { headers, data: { settings: { ...defaults(), provider }, clearApiKey: true } });
+  }
   await request.post('/api/settings', { headers, data: { settings: defaults(), clearApiKey: true } });
 });
 
@@ -18,7 +21,8 @@ test('portable setup, persistence, safe text rendering, and responsive layout', 
   await expect(page.getByText('DESKTOP SIMULATOR', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /Home network/ })).toBeVisible();
   await expect(page.locator('[name="provider"][value="xiaozhi"]')).toBeChecked();
-  await expect(page.locator('#provider-requirement')).toHaveText('Nothing else to enter for XiaoZhi');
+  await expect(page.locator('#provider-requirement')).toHaveText('XiaoZhi account required');
+  await expect(page.locator('#provider-action')).toHaveAttribute('href', 'https://xiaozhi.me/console/');
   await expect(page.locator('#provider-fields')).toBeHidden();
   await expect(page.locator('[data-panel="connection"]')).toBeVisible();
   await expect(page.locator('[data-panel="personality"]')).toBeVisible();
@@ -30,7 +34,10 @@ test('portable setup, persistence, safe text rendering, and responsive layout', 
   await expect(page.locator('#language-support-note')).toContainText('XiaoZhi');
   await expect(page.locator('[name="voiceModel"]')).toHaveValue('');
   await expect(page.locator('[name="voice"]')).toHaveValue('');
-  await expect(page.locator('#voice-help')).toContainText('paired server');
+  await expect(page.locator('[name="speechProvider"]')).toHaveValue('same');
+  await expect(page.locator('#speech-requirement')).toContainText('pairing required');
+  await expect(page.locator('#speech-action')).toHaveAttribute('href', 'https://xiaozhi.me/console/agents');
+  await expect(page.locator('#voice-help')).toContainText('paired agent');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: `test-results/${info.project.name}-setup.png`, fullPage: true });
 
@@ -100,13 +107,20 @@ test('voice catalogue follows the provider and speech model, with an honest loca
     } });
   });
   await page.goto('/');
-  await page.locator('[name="provider"][value="openai"]').check();
+  await page.locator('[name="speechProvider"]').selectOption('openai');
+  await expect(page.locator('[name="provider"][value="xiaozhi"]')).toBeChecked();
+  await expect(page.locator('#speech-fields')).toBeVisible();
+  await expect(page.locator('#speech-key-status')).toHaveText('Required to use');
+  await expect(page.locator('#speech-action')).toHaveAttribute('href', 'https://platform.openai.com/api-keys');
   await expect(page.locator('[name="voiceModel"]')).toHaveValue('gpt-4o-mini-tts');
   await expect(page.locator('[name="voice"]')).toHaveValue('marin');
   expect(await page.locator('[name="voice"] option').count()).toBe(13);
+  await page.locator('#speech-api-key').fill('dummy-speech-key');
   await page.getByRole('button', { name: /Save preferences/ }).click();
   await expect(page.locator('#notice')).toContainText('Preferences saved');
   await page.reload();
+  await expect(page.locator('[name="speechProvider"]')).toHaveValue('openai');
+  await expect(page.locator('#speech-key-status')).toHaveText('Saved');
   await expect(page.locator('[name="voice"]')).toHaveValue('marin');
   await page.locator('[name="voiceModel"]').selectOption('tts-1');
   expect(await page.locator('[name="voice"] option').count()).toBe(9);

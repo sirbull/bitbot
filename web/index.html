@@ -79,12 +79,12 @@
               <label>Personality<textarea name="personality" rows="6" maxlength="2000" aria-describedby="personality-hint"></textarea></label><p class="hint" id="personality-hint">Describe its tone, interests, and how it should answer. Norwegian or English is fine.</p>
               <div class="field-heading"><h3>Choose its AI</h3><span class="mono muted">CHANGE ANYTIME</span></div>
               <div class="provider-grid" role="group" aria-label="AI provider">
-                <label class="provider-card recommended"><span class="recommendation mono">DEFAULT</span><input type="radio" name="provider" value="xiaozhi"><span class="provider-top">XiaoZhi<span class="provider-mark">✳</span></span><span class="provider-caption">Easiest setup · no API key needed here</span></label>
+                <label class="provider-card recommended"><span class="recommendation mono">DEFAULT</span><input type="radio" name="provider" value="xiaozhi"><span class="provider-top">XiaoZhi<span class="provider-mark">✳</span></span><span class="provider-caption">XiaoZhi account required · no API key</span></label>
                 <label class="provider-card"><input type="radio" name="provider" value="gemini"><span class="provider-top">Gemini<span class="provider-mark">G</span></span><span class="provider-caption">Free allowance may be available</span></label>
                 <label class="provider-card"><input type="radio" name="provider" value="openai"><span class="provider-top">OpenAI<span class="provider-mark">◎</span></span><span class="provider-caption">Paid API account required</span></label>
                 <label class="provider-card"><input type="radio" name="provider" value="local"><span class="provider-top">Self-hosted<span class="provider-mark">⌂</span></span><span class="provider-caption">Your own computer or server</span></label>
               </div>
-              <div id="provider-guidance" class="provider-guidance" role="status"><strong id="provider-requirement"></strong><p id="provider-help"></p></div>
+              <div id="provider-guidance" class="provider-guidance" role="status"><strong id="provider-requirement"></strong><p id="provider-help"></p><a id="provider-action" class="service-link" target="_blank" rel="noopener noreferrer"></a></div>
               <div id="provider-fields">
                 <div class="field-row"><label>Model ID <span class="field-status" id="model-status"></span><input name="model" maxlength="120" placeholder="Enter a model supported by your service" autocomplete="off"></label><label>Service URL <span class="field-status" id="endpoint-status"></span><input name="endpoint" maxlength="240" placeholder="https://your-service.example" autocomplete="off" spellcheck="false"></label></div>
                 <label>API key <span class="field-status" id="key-status"></span><div class="password-field"><input id="api-key" type="password" maxlength="256" autocomplete="new-password" placeholder="Enter the key from your provider"><button type="button" class="reveal" data-reveal="api-key" aria-label="Show API key">Show</button></div></label>
@@ -96,8 +96,16 @@
 
             <section class="setup-step" data-panel="voice" aria-labelledby="voice-title">
               <div class="section-heading"><div><div class="eyebrow">03 / FIND ITS VOICE</div><h2 id="voice-title" tabindex="-1">Sounds like your BitBot.</h2></div></div>
-              <p class="section-intro">Choose how your companion should handle language and speech. The available models and voices follow the AI provider selected above.</p>
+              <p class="section-intro">Choose how your companion should handle language and speech. Speech can come from the selected AI service or from a separate provider.</p>
               <p class="integration-note">The desktop simulator can play a clearly labelled sample with a voice installed on this computer. Exact provider previews will use the robot's speech adapter when audio is integrated.</p>
+              <label>Speech service<select name="speechProvider" id="speech-provider" aria-describedby="speech-service-help"><option value="same">Same as the selected AI service</option><option value="xiaozhi">XiaoZhi</option><option value="gemini">Gemini TTS</option><option value="openai">OpenAI TTS</option><option value="local">Self-hosted voice gateway</option></select></label>
+              <div class="provider-guidance speech-guidance"><strong id="speech-requirement"></strong><p id="speech-service-help"></p><a id="speech-action" class="service-link" target="_blank" rel="noopener noreferrer"></a></div>
+              <div id="speech-fields" hidden>
+                <label id="speech-endpoint-label">Voice gateway URL <span class="field-status" id="speech-endpoint-status"></span><input name="speechEndpoint" maxlength="240" placeholder="https://your-voice-service.example" autocomplete="off" spellcheck="false"></label>
+                <label id="speech-key-label">Speech API key <span class="field-status" id="speech-key-status"></span><div class="password-field"><input id="speech-api-key" type="password" maxlength="256" autocomplete="new-password" placeholder="Enter the key from your speech provider"><button type="button" class="reveal" data-reveal="speech-api-key" aria-label="Show speech API key">Show</button></div></label>
+                <label class="checkbox-label" id="clear-speech-key-label"><input id="clear-speech-key" type="checkbox">Remove the saved key for this speech provider</label>
+                <p class="hint">Cloud keys are stored by provider, so the same saved key is reused when one service handles both conversation and speech.</p>
+              </div>
               <label>Preferred conversation language<select name="language" aria-describedby="language-hint language-support-note"><option value="auto">Automatic · Norwegian + English</option><option value="auto-all">Automatic · any supported language</option></select></label>
               <p class="hint" id="language-hint">The default detects Norwegian and English. Choose another language to prefer it, or allow automatic switching across every language supported by the selected route. The setup page stays in English.</p>
               <p class="language-support" id="language-support-note"></p>

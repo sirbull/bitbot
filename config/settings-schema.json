@@ -7,6 +7,8 @@
     "endpoint": { "type": "url", "maxBytes": 240, "default": "" },
     "language": { "type": "string", "format": "language", "maxBytes": 63, "default": "auto" },
     "personality": { "type": "string", "maxBytes": 2000, "default": "You are BitBot, a curious and friendly little companion. Keep spoken answers short and clear. Respond in the language the user speaks, Norwegian or English. Be honest when you do not know something." },
+    "speechProvider": { "type": "enum", "values": ["same", "xiaozhi", "gemini", "openai", "local"], "default": "same" },
+    "speechEndpoint": { "type": "url", "maxBytes": 240, "default": "" },
     "voiceModel": { "type": "string", "maxBytes": 120, "default": "" },
     "voice": { "type": "string", "maxBytes": 80, "default": "" },
     "speed": { "type": "number", "min": 0.75, "max": 1.25, "default": 1 },

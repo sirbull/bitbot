@@ -168,30 +168,46 @@ cJSON* PublicSettings() {
     const auto* settings = cJSON_GetObjectItemCaseSensitive(shared.document, "settings");
     cJSON_AddItemToObject(output, "settings", cJSON_Duplicate(settings, true));
     const auto* keys = cJSON_GetObjectItemCaseSensitive(shared.document, "keys");
-    cJSON_AddBoolToObject(output, "hasApiKey", strlen(Text(keys, Text(settings, "provider"))) > 0);
+    const std::string provider = Text(settings, "provider");
+    const std::string speech_choice = Text(settings, "speechProvider");
+    const std::string speech_provider = speech_choice == "same" ? provider : speech_choice;
+    cJSON_AddBoolToObject(output, "hasApiKey", strlen(Text(keys, provider.c_str())) > 0);
+    cJSON_AddBoolToObject(output, "hasSpeechApiKey", strlen(Text(keys, speech_provider.c_str())) > 0);
+    auto* providers = cJSON_AddArrayToObject(output, "keyProviders");
+    for (const auto* key = keys->child; key; key = key->next) cJSON_AddItemToArray(providers, cJSON_CreateString(key->string));
     return output;
 }
 bool SaveSettings(const cJSON* input, std::string& error) {
     if (!cJSON_IsObject(input)) { error = "Invalid settings request."; return false; }
-    for (const auto* item = input->child; item; item = item->next) if (strcmp(item->string, "settings") && strcmp(item->string, "apiKey") && strcmp(item->string, "clearApiKey")) { error = "Unknown request field."; return false; }
+    for (const auto* item = input->child; item; item = item->next) if (strcmp(item->string, "settings") && strcmp(item->string, "apiKey") && strcmp(item->string, "clearApiKey") && strcmp(item->string, "speechApiKey") && strcmp(item->string, "clearSpeechApiKey")) { error = "Unknown request field."; return false; }
     const auto* patch = cJSON_GetObjectItemCaseSensitive(input, "settings");
     if (!ValidateSettings(patch, error)) return false;
     Json next(cJSON_Duplicate(shared.document, true));
     auto* settings = cJSON_GetObjectItemCaseSensitive(next.value, "settings");
     for (const auto* item = patch->child; item; item = item->next) cJSON_ReplaceItemInObjectCaseSensitive(settings, item->string, cJSON_Duplicate(item, true));
     const std::string provider = Text(settings, "provider");
+    const std::string speech_choice = Text(settings, "speechProvider");
+    const std::string speech_provider = speech_choice == "same" ? provider : speech_choice;
     const auto* pitch = cJSON_GetObjectItemCaseSensitive(settings, "pitch");
     const std::string url = Text(settings, "endpoint");
-    if (provider != "local" && (pitch->valuedouble != 0 || url.rfind("http://", 0) == 0 || url.rfind("ws://", 0) == 0)) { error = "Cloud providers require HTTPS/WSS and do not support numerical pitch."; return false; }
+    const std::string speech_url = Text(settings, "speechEndpoint");
+    if (provider != "local" && (url.rfind("http://", 0) == 0 || url.rfind("ws://", 0) == 0)) { error = "Cloud providers require HTTPS/WSS."; return false; }
+    if (speech_provider != "local" && (pitch->valuedouble != 0 || speech_url.rfind("http://", 0) == 0 || speech_url.rfind("ws://", 0) == 0)) { error = "Cloud speech providers require HTTPS/WSS and do not support numerical pitch."; return false; }
     const auto* key = cJSON_GetObjectItemCaseSensitive(input, "apiKey");
     const auto* clear = cJSON_GetObjectItemCaseSensitive(input, "clearApiKey");
-    if ((key && !cJSON_IsString(key)) || (clear && !cJSON_IsBool(clear)) || strlen(Text(input, "apiKey")) > 256) { error = "Invalid API key."; return false; }
+    const auto* speech_key = cJSON_GetObjectItemCaseSensitive(input, "speechApiKey");
+    const auto* clear_speech = cJSON_GetObjectItemCaseSensitive(input, "clearSpeechApiKey");
+    if ((key && !cJSON_IsString(key)) || (clear && !cJSON_IsBool(clear)) || strlen(Text(input, "apiKey")) > 256 || (speech_key && !cJSON_IsString(speech_key)) || (clear_speech && !cJSON_IsBool(clear_speech)) || strlen(Text(input, "speechApiKey")) > 256) { error = "Invalid API key."; return false; }
     const std::string secret = Text(input, "apiKey");
-    for (unsigned char ch : secret) if (ch <= 32 || ch == 127) { error = "Invalid API key."; return false; }
-    if (!secret.empty() && cJSON_IsTrue(clear)) { error = "Choose key replacement or removal."; return false; }
+    const std::string speech_secret = Text(input, "speechApiKey");
+    for (const auto& value : {secret, speech_secret}) for (unsigned char ch : value) if (ch <= 32 || ch == 127) { error = "Invalid API key."; return false; }
+    if ((!secret.empty() && cJSON_IsTrue(clear)) || (!speech_secret.empty() && cJSON_IsTrue(clear_speech))) { error = "Choose key replacement or removal."; return false; }
+    if (speech_provider == provider && (!speech_secret.empty() || cJSON_IsTrue(clear_speech))) { error = "The selected AI and speech services share one API key."; return false; }
     auto* keys = cJSON_GetObjectItemCaseSensitive(next.value, "keys");
     if (cJSON_IsTrue(clear) || !secret.empty()) cJSON_DeleteItemFromObjectCaseSensitive(keys, provider.c_str());
     if (!secret.empty()) cJSON_AddStringToObject(keys, provider.c_str(), secret.c_str());
+    if (cJSON_IsTrue(clear_speech) || !speech_secret.empty()) cJSON_DeleteItemFromObjectCaseSensitive(keys, speech_provider.c_str());
+    if (!speech_secret.empty()) cJSON_AddStringToObject(keys, speech_provider.c_str(), speech_secret.c_str());
     if (!Commit(next.value)) { error = "Could not save preferences."; return false; }
     return true;
 }

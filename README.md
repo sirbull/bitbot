@@ -3,7 +3,8 @@
 A small portable AI companion for the **Seeed XIAO ESP32-S3 Sense**, with a
 **7-pin ST7789 240×240** display, camera, microphone, and speaker. Norwegian
 and English are the default pair, with an international BCP-47 language
-preference and provider-aware speech-model/voice dropdowns. The desktop
+preference and an independent speech service with provider-aware model/voice
+dropdowns. The desktop
 simulator includes a clearly labelled local browser voice preview.
 
 **Current milestone: commissioning and hardware bring-up.** The English setup

@@ -24,6 +24,18 @@ test('provider keys stay separate; clearing one never removes the others', () =>
   assert.throws(() => updateDocument(doc, { settings: {}, apiKey: 'new', clearApiKey: true }));
 });
 
+test('a separate speech provider keeps its own secret and never returns it', () => {
+  let doc = updateDocument(initialDocument(), { settings: { provider: 'xiaozhi', speechProvider: 'openai' }, speechApiKey: 'speech-secret' });
+  assert.equal(doc.keys.openai, 'speech-secret');
+  assert.equal(publicSettings(doc).hasApiKey, false);
+  assert.equal(publicSettings(doc).hasSpeechApiKey, true);
+  assert.deepEqual(publicSettings(doc).keyProviders, ['openai']);
+  assert.ok(!JSON.stringify(publicSettings(doc)).includes('speech-secret'));
+  assert.throws(() => updateDocument(doc, { settings: { speechProvider: 'same' }, speechApiKey: 'ambiguous-secret' }));
+  doc = updateDocument(doc, { settings: {}, clearSpeechApiKey: true });
+  assert.equal(publicSettings(doc).hasSpeechApiKey, false);
+});
+
 test('simulator adds newly introduced defaults to an older saved document', () => {
   const document = initialDocument();
   delete document.settings.voiceModel;
@@ -33,9 +45,10 @@ test('simulator adds newly introduced defaults to an older saved document', () =
 });
 
 test('server enforces byte limits, type limits, URLs, and capabilities', () => {
-  const invalid = [{ name: ' ' }, { name: 'å'.repeat(25) }, { volume: 101 }, { volume: '50' }, { idleSeconds: 15.5 }, { captions: 'true' }, { provider: 'invented' }, { language: 'en_US' }, { language: '../en' }, { pitch: 2 }, { endpoint: 'javascript:alert(1)' }, { endpoint: 'https://key:secret@example.com' }, { endpoint: 'https://example.com?key=secret' }, { endpoint: 'http://example.com' }, { unknown: 5 }, { name: 'a\0b' }];
+  const invalid = [{ name: ' ' }, { name: 'å'.repeat(25) }, { volume: 101 }, { volume: '50' }, { idleSeconds: 15.5 }, { captions: 'true' }, { provider: 'invented' }, { speechProvider: 'invented' }, { language: 'en_US' }, { language: '../en' }, { pitch: 2 }, { endpoint: 'javascript:alert(1)' }, { endpoint: 'https://key:secret@example.com' }, { endpoint: 'https://example.com?key=secret' }, { endpoint: 'http://example.com' }, { speechEndpoint: 'http://example.com' }, { unknown: 5 }, { name: 'a\0b' }];
   for (const patch of invalid) assert.throws(() => validateSettings(patch), JSON.stringify(patch));
   assert.equal(validateSettings({ provider: 'local', endpoint: 'http://192.168.1.4:8080', pitch: -3 }).pitch, -3);
+  assert.equal(validateSettings({ speechProvider: 'local', speechEndpoint: 'http://192.168.1.4:9000', pitch: -2 }).pitch, -2);
   assert.equal(validateSettings({ language: 'pt-BR' }).language, 'pt-BR');
   assert.equal(validateSettings({ language: 'zh-Hant-TW' }).language, 'zh-Hant-TW');
   assert.equal(validateSettings({ language: 'auto-all' }).language, 'auto-all');

@@ -77,8 +77,9 @@ flowchart LR
 ```
 
 The commissioning build does not capture microphone/camera data or call an
-AI provider. Provider, personality, voice, and display preferences are stored
-for integration; saving them must not imply that those integrations exist.
+AI provider. Independent conversation/speech providers, personality, voice, and
+display preferences are stored for integration; saving them must not imply that
+those integrations exist.
 The simulator never joins networks or invokes a paid API.
 
 ## Security and storage

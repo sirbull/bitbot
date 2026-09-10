@@ -67,6 +67,9 @@ results here when hardware is available; do not label them tested in advance.
 - Endpoint validation does not prove an endpoint is compatible/reachable. The
   bundled speech model and voice lists are documented fallbacks; provider
   connection testing and live catalogue discovery do not exist yet.
+- XiaoZhi account pairing is not integrated yet. Its authenticated console owns
+  the live language-filtered voice list and provider audio samples. The portal
+  links there and can store a separate speech-provider choice in the meantime.
 - The hosted service options are candidates, not measured recommendations.
 - Firmware and simulator have separate native storage/network implementations;
   shared schema and UI reduce drift but do not replace physical integration tests.

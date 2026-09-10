@@ -68,6 +68,19 @@ The embedded fallback catalogue follows the selected provider and speech model:
   models.
 - Self-hosted leaves discovery to the future gateway adapter.
 
+Conversation and speech services are independent settings. `Same as the
+selected AI service` is the default, but a XiaoZhi conversation can be read by
+Gemini TTS, OpenAI TTS, or a self-hosted gateway once the corresponding adapter
+is connected. Provider keys are stored by provider, so one saved key is reused
+when that provider handles both tasks; a different speech service can save a
+separate key and endpoint without exposing either secret through the settings
+API.
+
+The portal states account and credential requirements before the user chooses a
+service and links to XiaoZhi Console, Google AI Studio, or OpenAI Platform as
+appropriate. These external pages need an internet connection and may not open
+while a phone is still attached to BitBot's isolated setup hotspot.
+
 The desktop simulator's Preview button uses the Web Speech API and labels the
 result as a local browser sample. It verifies preview text, language, speed,
 volume, and local pitch handling without sending credentials or pretending that

@@ -5,23 +5,27 @@
   const form = $('#settings-form');
   const providerInfo = {
     xiaozhi: {
-      requirement: 'Nothing else to enter for XiaoZhi',
-      help: 'This is the recommended default. No model ID, service URL, or API key is needed on this page. Account and device pairing will be handled through the XiaoZhi service when its adapter is added.',
+      requirement: 'XiaoZhi account required',
+      help: 'Create or sign in to a XiaoZhi account, then pair this device with an agent. XiaoZhi does not use an API key on this page. Open the account link after reconnecting your phone or computer to the internet.',
+      action: 'Create account or sign in to XiaoZhi ↗', actionUrl: 'https://xiaozhi.me/console/',
       fields: false,
     },
     gemini: {
       requirement: 'You will need a Gemini API key',
-      help: 'Create a key in Google AI Studio. A free allowance may be available, depending on the model, account, and current quotas. You can add the key later.',
+      help: 'A Google account and Gemini API key are required. A free allowance may be available, depending on the model, account, and current quotas.',
+      action: 'Create a Gemini API key ↗', actionUrl: 'https://aistudio.google.com/apikey',
       model: 'Optional', endpoint: 'Optional', key: 'Required to use', fields: true,
     },
     openai: {
       requirement: 'You will need an OpenAI API key and API billing',
-      help: 'A ChatGPT subscription does not supply an API key or API credit. You can add the key later.',
+      help: 'Create an OpenAI Platform account and API key. A ChatGPT subscription does not supply API credit for this service.',
+      action: 'Open OpenAI API keys ↗', actionUrl: 'https://platform.openai.com/api-keys',
       model: 'Optional', endpoint: 'Optional', key: 'Required to use', fields: true,
     },
     local: {
       requirement: 'You will need the address of your own service',
       help: 'This avoids per-call cloud fees, but a reachable voice gateway is required. Ollama by itself does not provide speech recognition or speech synthesis.',
+      action: '', actionUrl: '',
       model: 'Optional', endpoint: 'Required to use', key: 'Usually not needed', fields: true,
     },
   };
@@ -37,12 +41,18 @@
   const speechProfiles = {
     xiaozhi: {
       models: [['', 'Managed by XiaoZhi service']], voices: [['', 'Managed by XiaoZhi service']],
-      note: 'XiaoZhi voice choices belong to the paired server and its configured TTS provider. BitBot will request that catalogue from the XiaoZhi adapter when it is connected.',
+      requirement: 'XiaoZhi account and device pairing required',
+      serviceHelp: 'XiaoZhi offers multiple voices after pairing. Its authenticated console filters them by language and includes playable samples. Until pairing is implemented, choose and preview the voice in the XiaoZhi console.',
+      action: 'Open XiaoZhi voice settings ↗', actionUrl: 'https://xiaozhi.me/console/agents',
+      note: 'The selected XiaoZhi voice belongs to the paired agent. BitBot will import its name and preview when the XiaoZhi account adapter is connected.',
     },
     gemini: {
       defaultModel: 'gemini-3.1-flash-tts-preview', defaultVoice: 'Achird',
       models: [['gemini-3.1-flash-tts-preview', 'Gemini 3.1 Flash TTS Preview · streaming'], ['gemini-2.5-flash-preview-tts', 'Gemini 2.5 Flash Preview TTS'], ['gemini-2.5-pro-preview-tts', 'Gemini 2.5 Pro Preview TTS']],
       voices: [['Zephyr', 'Bright'], ['Puck', 'Upbeat'], ['Charon', 'Informative'], ['Kore', 'Firm'], ['Fenrir', 'Excitable'], ['Leda', 'Youthful'], ['Orus', 'Firm'], ['Aoede', 'Breezy'], ['Callirrhoe', 'Easy-going'], ['Autonoe', 'Bright'], ['Enceladus', 'Breathy'], ['Iapetus', 'Clear'], ['Umbriel', 'Easy-going'], ['Algieba', 'Smooth'], ['Despina', 'Smooth'], ['Erinome', 'Clear'], ['Algenib', 'Gravelly'], ['Rasalgethi', 'Informative'], ['Laomedeia', 'Upbeat'], ['Achernar', 'Soft'], ['Alnilam', 'Firm'], ['Schedar', 'Even'], ['Gacrux', 'Mature'], ['Pulcherrima', 'Forward'], ['Achird', 'Friendly'], ['Zubenelgenubi', 'Casual'], ['Vindemiatrix', 'Gentle'], ['Sadachbia', 'Lively'], ['Sadaltager', 'Knowledgeable'], ['Sulafat', 'Warm']],
+      requirement: 'Google account and Gemini API key required',
+      serviceHelp: 'Use Gemini as a separate speech layer if another service handles the conversation. A saved Gemini key is shared between conversation and speech.',
+      action: 'Create a Gemini API key ↗', actionUrl: 'https://aistudio.google.com/apikey',
       note: '30 voices documented for Gemini TTS. The description after each name is the provider’s own voice characteristic.',
     },
     openai: {
@@ -50,14 +60,20 @@
       models: [['gpt-4o-mini-tts', 'gpt-4o-mini-tts · recommended'], ['tts-1', 'tts-1 · lower latency'], ['tts-1-hd', 'tts-1-hd · higher quality']],
       voices: ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'onyx', 'nova', 'sage', 'shimmer', 'verse', 'marin', 'cedar'].map(name => [name, ['marin', 'cedar'].includes(name) ? 'recommended for quality' : 'built-in voice']),
       legacyVoices: ['alloy', 'ash', 'coral', 'echo', 'fable', 'onyx', 'nova', 'sage', 'shimmer'],
+      requirement: 'OpenAI Platform account, API key, and API billing required',
+      serviceHelp: 'Use OpenAI TTS as a separate speech layer if another service handles the conversation. A ChatGPT subscription does not include this API usage.',
+      action: 'Open OpenAI API keys ↗', actionUrl: 'https://platform.openai.com/api-keys',
       note: 'OpenAI provides 13 built-in voices for gpt-4o-mini-tts. The older tts-1 models use a smaller list; marin and cedar are the current quality recommendations.',
     },
     local: {
       models: [['', 'Reported by your voice gateway']], voices: [['', 'Service default']],
+      requirement: 'A reachable self-hosted voice gateway is required',
+      serviceHelp: 'This option needs a separate computer or server that provides speech synthesis. It can avoid cloud accounts and per-call fees.',
+      action: '', actionUrl: '',
       note: 'Self-hosted gateways have no universal model or voice list. The connected adapter will replace these placeholders with the choices reported by your service.',
     },
   };
-  let token = '', settings = null, dirty = false, busy = false, testing = false, lastJob = '', simulator = false, activePage = 'connection', pollFailures = 0, finished = false, savedNetworkCount = 0, keySaved = false;
+  let token = '', settings = null, dirty = false, busy = false, testing = false, lastJob = '', simulator = false, activePage = 'connection', pollFailures = 0, finished = false, savedNetworkCount = 0, keySaved = false, speechKeySaved = false, keyProviders = new Set();
 
   async function api(path, body) {
     const response = await fetch(`/api/${path}`, {
@@ -93,6 +109,12 @@
     $('#save-state').textContent = dirty ? 'You have unsaved preferences' : 'All changes saved';
   }
   function currentProvider() { return form.elements.provider.value; }
+  function currentSpeechProvider() {
+    return form.elements.speechProvider.value === 'same' ? currentProvider() : form.elements.speechProvider.value;
+  }
+  function setServiceLink(selector, label, url) {
+    const link = $(selector); link.textContent = label || ''; link.href = url || '#'; link.hidden = !label || !url;
+  }
   function addSelectOptions(select, entries, selected, groupLabel) {
     select.replaceChildren();
     const parent = groupLabel ? document.createElement('optgroup') : select;
@@ -107,7 +129,7 @@
     select.value = selected;
   }
   function updateVoiceOptions(resetProvider = false, preserveSavedCustom = true) {
-    const provider = currentProvider();
+    const provider = currentSpeechProvider();
     const profile = speechProfiles[provider];
     const modelSelect = form.elements.voiceModel;
     const voiceSelect = form.elements.voice;
@@ -124,7 +146,7 @@
     updatePreviewSupport();
   }
   function languageProfile() {
-    const provider = currentProvider();
+    const provider = currentSpeechProvider();
     if (provider === 'xiaozhi') return { codes: languageCatalogs.xiaozhi, label: 'XiaoZhi firmware locales', note: `XiaoZhi offers ${languageCatalogs.xiaozhi.length} device locales. Spoken output also depends on the voice configured in the XiaoZhi service.` };
     if (provider === 'gemini') return { codes: languageCatalogs.geminiTts, label: 'Gemini TTS languages', note: `This Gemini TTS catalog contains ${languageCatalogs.geminiTts.length} documented output languages for the selected speech model.` };
     if (provider === 'openai') return { codes: languageCatalogs.openai, label: 'OpenAI speech languages', note: `OpenAI documents ${languageCatalogs.openai.length} TTS languages. Voice quality varies, and current voices are optimized for English.` };
@@ -167,14 +189,31 @@
     const info = providerInfo[provider];
     $('#provider-requirement').textContent = info.requirement;
     $('#provider-help').textContent = info.help;
+    setServiceLink('#provider-action', info.action, info.actionUrl);
     $('#provider-fields').hidden = !info.fields;
     if (info.fields) {
       $('#model-status').textContent = info.model;
       $('#endpoint-status').textContent = info.endpoint;
       $('#key-status').textContent = keySaved ? 'Saved' : info.key;
     }
-    form.elements.pitch.disabled = provider !== 'local';
-    $('#pitch-help').textContent = provider === 'local' ? 'Reserved for a self-hosted TTS adapter with pitch support. The adapter is not connected yet.' : 'Numerical pitch is unavailable for this provider. Its speech adapter may offer style instructions later.';
+    const speechProvider = currentSpeechProvider();
+    const speechInfo = speechProfiles[speechProvider];
+    const separateSpeechService = speechProvider !== provider;
+    $('#speech-requirement').textContent = speechInfo.requirement;
+    $('#speech-service-help').textContent = `${form.elements.speechProvider.value === 'same' ? 'Using the AI service selected above. ' : ''}${speechInfo.serviceHelp}`;
+    setServiceLink('#speech-action', speechInfo.action, speechInfo.actionUrl);
+    const needsSpeechFields = separateSpeechService && speechProvider !== 'xiaozhi';
+    $('#speech-fields').hidden = !needsSpeechFields;
+    if (needsSpeechFields) {
+      const local = speechProvider === 'local';
+      $('#speech-endpoint-label').hidden = !local;
+      $('#speech-key-label').hidden = false;
+      $('#clear-speech-key-label').hidden = false;
+      $('#speech-endpoint-status').textContent = local ? 'Required to use' : 'Optional';
+      $('#speech-key-status').textContent = speechKeySaved ? 'Saved' : local ? 'Usually not needed' : 'Required to use';
+    }
+    form.elements.pitch.disabled = speechProvider !== 'local';
+    $('#pitch-help').textContent = speechProvider === 'local' ? 'Available when the self-hosted speech adapter reports pitch support.' : 'Numerical pitch is unavailable for this speech service. Its adapter may offer style instructions later.';
     $('#preview-name').textContent = form.elements.name.value.trim().toUpperCase() || 'BITBOT';
     updatePreviewSupport();
   }
@@ -198,7 +237,7 @@
     utterance.voice = candidates.find(voice => voice.lang.toLowerCase() === requested) || candidates.find(voice => voice.lang.toLowerCase().split('-')[0] === base) || null;
     utterance.rate = Number(form.elements.speed.value);
     utterance.volume = Number(form.elements.volume.value) / 100;
-    utterance.pitch = currentProvider() === 'local' ? Math.pow(2, Number(form.elements.pitch.value) / 12) : 1;
+    utterance.pitch = currentSpeechProvider() === 'local' ? Math.pow(2, Number(form.elements.pitch.value) / 12) : 1;
     const selected = form.elements.voice.options[form.elements.voice.selectedIndex]?.textContent || 'service default';
     utterance.onstart = () => { $('#voice-preview-status').textContent = `Playing a local browser sample. Selected provider voice: ${selected}.`; };
     utterance.onend = () => updatePreviewSupport();
@@ -214,7 +253,11 @@
     }
     $('#api-key').value = '';
     $('#clear-key').checked = false;
+    $('#speech-api-key').value = '';
+    $('#clear-speech-key').checked = false;
+    keyProviders = new Set(result.keyProviders || []);
     keySaved = result.hasApiKey;
+    speechKeySaved = result.hasSpeechApiKey;
     updateControls();
     updateLanguageOptions();
     updateVoiceOptions();
@@ -232,8 +275,9 @@
     if (!settings) throw new Error('Wait for the device settings to load.');
     const invalid = [...form.querySelectorAll('input,select,textarea')].find(control => !control.disabled && !control.checkValidity());
     if (invalid) { showPage(invalid.closest('[data-panel]').dataset.panel); invalid.reportValidity(); throw new Error('Please check the highlighted field.'); }
-    const body = { settings: collectSettings(), clearApiKey: $('#clear-key').checked };
+    const body = { settings: collectSettings(), clearApiKey: $('#clear-key').checked, clearSpeechApiKey: $('#clear-speech-key').checked };
     if ($('#api-key').value) body.apiKey = $('#api-key').value;
+    if ($('#speech-api-key').value) body.speechApiKey = $('#speech-api-key').value;
     const result = await api('settings', body);
     fillSettings(result);
   }
@@ -348,18 +392,29 @@
   $('#preview-voice').addEventListener('click', previewVoice);
   $('#open-network').addEventListener('change', togglePassword);
   $$('[data-reveal]').forEach(button => button.addEventListener('click', () => {
-    const input = document.getElementById(button.dataset.reveal); const reveal = input.type === 'password'; input.type = reveal ? 'text' : 'password'; button.textContent = reveal ? 'Hide' : 'Show'; button.setAttribute('aria-label', `${reveal ? 'Hide' : 'Show'} ${input.id === 'api-key' ? 'API key' : 'Wi-Fi password'}`);
+    const input = document.getElementById(button.dataset.reveal); const reveal = input.type === 'password'; input.type = reveal ? 'text' : 'password'; button.textContent = reveal ? 'Hide' : 'Show';
+    const label = input.id === 'wifi-password' ? 'Wi-Fi password' : input.id === 'speech-api-key' ? 'speech API key' : 'API key';
+    button.setAttribute('aria-label', `${reveal ? 'Hide' : 'Show'} ${label}`);
   }));
   form.addEventListener('input', event => {
     if (event.target.id === 'voice-preview-text') return;
     if (event.target.name === 'provider') {
-      if (currentProvider() !== 'local') form.elements.pitch.value = 0;
+      if (currentSpeechProvider() !== 'local') { form.elements.pitch.value = 0; form.elements.speechEndpoint.value = ''; }
       $('#api-key').value = ''; $('#clear-key').checked = false;
-      keySaved = false;
+      keySaved = keyProviders.has(currentProvider());
+      if (form.elements.speechProvider.value === 'same') {
+        speechKeySaved = keyProviders.has(currentSpeechProvider());
+        updateVoiceOptions(true);
+      }
+    }
+    if (event.target.name === 'speechProvider') {
+      if (currentSpeechProvider() !== 'local') { form.elements.pitch.value = 0; form.elements.speechEndpoint.value = ''; }
+      $('#speech-api-key').value = ''; $('#clear-speech-key').checked = false;
+      speechKeySaved = keyProviders.has(currentSpeechProvider());
       updateVoiceOptions(true);
     }
     setDirty(true); updateControls();
-    if (event.target.name === 'provider' || event.target.name === 'voiceModel') updateLanguageOptions();
+    if (event.target.name === 'provider' || event.target.name === 'speechProvider' || event.target.name === 'voiceModel') updateLanguageOptions();
     if (event.target.name === 'voiceModel') updateVoiceOptions(false, false);
   });
   form.addEventListener('submit', async event => {
