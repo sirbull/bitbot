@@ -48,6 +48,7 @@ cJSON* PublicSettings();  // Caller holds mutex; caller owns result.
 bool SaveSettings(const cJSON* input, std::string& error);
 bool SaveNetwork(const Network& network);
 void InitNetwork();
+void StartStation();
 void OpenSetup();
 void TickNetwork();
 void StartPortal();

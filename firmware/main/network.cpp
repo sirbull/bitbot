@@ -19,6 +19,11 @@ static int64_t attempt_started = 0, retry_at = 0;
 static int profile_index = 0, retry_seconds = 5;
 static bool attempting = false, was_connected = false;
 
+static bool StopWifi() {
+    const esp_err_t result = esp_wifi_stop();
+    return result == ESP_OK || result == ESP_ERR_WIFI_NOT_STARTED;
+}
+
 int64_t NowMs() { return esp_timer_get_time() / 1000; }
 const char* StateName(State state) {
     switch (state) {
@@ -47,12 +52,24 @@ void InitNetwork() {
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, Event, nullptr));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, Event, nullptr));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_start());
     uint8_t mac[6]; ESP_ERROR_CHECK(esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP));
     char name[24]; snprintf(name, sizeof(name), "BitBot-%02X%02X", mac[4], mac[5]);
     shared.setup_ssid = name;
     shared.setup_password = Text(shared.document, "setupPassword");
+    shared.state = State::Offline;
+}
+void StartStation() {
+    if (!StopWifi()) {
+        ESP_LOGE("bitbot", "Could not stop Wi-Fi before station start");
+        shared.state = State::Error;
+        return;
+    }
+    if (esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK || esp_wifi_start() != ESP_OK) {
+        ESP_LOGE("bitbot", "Could not start Wi-Fi station");
+        shared.state = State::Error;
+        return;
+    }
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
     shared.state = State::Offline;
 }
 void OpenSetup() {
@@ -66,24 +83,32 @@ void OpenSetup() {
         shared.token = RandomHex(24);
         shared.job = "idle"; shared.message.clear();
     }
+    // A clean AP boot avoids stale STA state/channel changes during first setup.
+    // The radio changes to AP+STA only after the user asks to test a network.
     esp_wifi_disconnect(); got_ip.store(false); attempting = false;
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+    if (!StopWifi() || esp_wifi_set_mode(WIFI_MODE_AP) != ESP_OK) {
+        ESP_LOGE("bitbot", "Could not open setup access point");
+        std::lock_guard<std::mutex> lock(shared.mutex); shared.state = State::Error;
+        return;
+    }
     wifi_config_t ap = {};
     memcpy(ap.ap.ssid, shared.setup_ssid.data(), shared.setup_ssid.size());
     ap.ap.ssid_len = shared.setup_ssid.size();
     memcpy(ap.ap.password, shared.setup_password.data(), shared.setup_password.size());
     ap.ap.authmode = WIFI_AUTH_WPA2_PSK; ap.ap.max_connection = 2; ap.ap.channel = 1;
     ap.ap.pmf_cfg.capable = true;
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+    if (esp_wifi_set_config(WIFI_IF_AP, &ap) != ESP_OK || esp_wifi_start() != ESP_OK || esp_wifi_set_ps(WIFI_PS_NONE) != ESP_OK) {
+        ESP_LOGE("bitbot", "Could not start setup access point");
+        std::lock_guard<std::mutex> lock(shared.mutex); shared.state = State::Error;
+        return;
+    }
     StartDns(); StartPortal();
     // Explicit physical commissioning output, never station passwords/API keys.
     printf("\nBITBOT PHYSICAL SETUP\nNetwork: %s\nSetup password: %s\nOpen http://192.168.4.1\n\n", shared.setup_ssid.c_str(), shared.setup_password.c_str());
 }
 static void CloseSetup() {
     StopPortal(); StopDns();
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
+    StartStation();
     std::lock_guard<std::mutex> lock(shared.mutex);
     shared.setup = false; shared.token.clear(); shared.state = State::Offline;
     shared.connect_requested = false; shared.pending = {};
@@ -95,6 +120,9 @@ static bool BeginConnection(const Network& network) {
     // Let disconnect events drain before accepting a fresh DHCP event.
     vTaskDelay(pdMS_TO_TICKS(150));
     got_ip.store(false);
+    wifi_mode_t mode;
+    if (esp_wifi_get_mode(&mode) != ESP_OK) return false;
+    if (mode == WIFI_MODE_AP && esp_wifi_set_mode(WIFI_MODE_APSTA) != ESP_OK) return false;
     wifi_config_t config = {};
     memcpy(config.sta.ssid, network.ssid.data(), network.ssid.size());
     memcpy(config.sta.password, network.password.data(), network.password.size());

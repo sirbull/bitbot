@@ -21,6 +21,7 @@ extern "C" void app_main() {
     InitNetwork();
     InitDisplay();
     if (cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(shared.document, "networks")) == 0) OpenSetup();
+    else StartStation();
     int64_t pressed_at = 0;
     bool handled = false;
     // GPIO0 only reaches this code after a normal boot. Holding at reset enters ROM.

@@ -5,7 +5,7 @@
 #include <cstring>
 #include <vector>
 #include <esp_wifi.h>
-#include <lwip/sockets.h>
+#include <net/if.h>
 
 namespace bitbot {
 static httpd_handle_t server = nullptr;
@@ -25,12 +25,6 @@ static std::string Header(httpd_req_t* req, const char* name) {
     std::string output(length + 1, '\0');
     if (httpd_req_get_hdr_value_str(req, name, output.data(), output.size()) != ESP_OK) return "";
     output.resize(length); return output;
-}
-static bool LocalAccess(httpd_req_t* req) {
-    sockaddr_in local = {}, peer = {}; socklen_t length = sizeof(local);
-    int fd = httpd_req_to_sockfd(req);
-    if (getsockname(fd, reinterpret_cast<sockaddr*>(&local), &length) != 0 || getpeername(fd, reinterpret_cast<sockaddr*>(&peer), &length) != 0) return false;
-    return local.sin_addr.s_addr == inet_addr("192.168.4.1") && (ntohl(peer.sin_addr.s_addr) & 0xffffff00U) == 0xc0a80400U;
 }
 static bool DuplicateFields(const cJSON* value) {
     if (!value) return false;
@@ -101,7 +95,11 @@ static esp_err_t Get(httpd_req_t* req, const std::string& uri) {
     if (uri == "/app.js") { bytes = assets::app; length = sizeof(assets::app); httpd_resp_set_type(req, "text/javascript; charset=utf-8"); }
     if (bytes) { httpd_resp_set_hdr(req, "Content-Encoding", "gzip"); return httpd_resp_send(req, reinterpret_cast<const char*>(bytes), length); }
     if (uri.rfind("/api/", 0) == 0) return Error(req, "Not found.", "404 Not Found");
-    httpd_resp_set_status(req, "302 Found"); httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/"); return httpd_resp_send(req, "", 0);
+    // Captive portal probes use arbitrary Host headers. Serve the portal on the
+    // AP-bound server rather than returning a bodyless redirect.
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    return httpd_resp_send(req, reinterpret_cast<const char*>(assets::index), sizeof(assets::index));
 }
 static esp_err_t Post(httpd_req_t* req, const std::string& uri) {
     const auto token = Header(req, "X-BitBot-Token");
@@ -162,14 +160,10 @@ static esp_err_t Handle(httpd_req_t* req) {
     httpd_resp_set_hdr(req, "X-Content-Type-Options", "nosniff");
     httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_set_hdr(req, "Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
-    if (!LocalAccess(req)) return Error(req, "Join the BitBot setup hotspot first.", "403 Forbidden");
     const auto host = Header(req, "Host");
-    if (host != "192.168.4.1" && host != "192.168.4.1:80") {
-        if (req->method != HTTP_GET) return Error(req, "Invalid host.", "403 Forbidden");
-        httpd_resp_set_status(req, "302 Found"); httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/"); return httpd_resp_send(req, "", 0);
-    }
+    if (host.empty()) return Error(req, "Invalid host.", "400 Bad Request");
     const auto origin = Header(req, "Origin");
-    if (!origin.empty() && origin != "http://192.168.4.1" && origin != "http://192.168.4.1:80") return Error(req, "Invalid origin.", "403 Forbidden");
+    if (req->method == HTTP_POST && !origin.empty() && origin != "http://192.168.4.1" && origin != "http://192.168.4.1:80") return Error(req, "Invalid origin.", "403 Forbidden");
     const std::string uri = std::string(req->uri).substr(0, std::string(req->uri).find('?'));
     return req->method == HTTP_GET ? Get(req, uri) : Post(req, uri);
 }
@@ -178,11 +172,24 @@ void StartPortal() {
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.stack_size = 10240; config.max_open_sockets = 4; config.lru_purge_enable = true;
     config.recv_wait_timeout = 5; config.send_wait_timeout = 5; config.max_resp_headers = 8;
-    ESP_ERROR_CHECK(httpd_start(&server, &config));
+    struct ifreq interface = {};
+    if (esp_netif_get_netif_impl_name(ap_netif, interface.ifr_name) != ESP_OK) {
+        ESP_LOGE("bitbot_portal", "Could not get the access-point interface name");
+        return;
+    }
+    config.if_name = &interface;
+    if (httpd_start(&server, &config) != ESP_OK) {
+        ESP_LOGE("bitbot_portal", "Could not start HTTP portal on %s", interface.ifr_name);
+        return;
+    }
     for (httpd_method_t method : {HTTP_GET, HTTP_POST}) {
         httpd_uri_t route = {}; route.uri = "/*"; route.method = method; route.handler = Handle;
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &route));
+        if (httpd_register_uri_handler(server, &route) != ESP_OK) {
+            ESP_LOGE("bitbot_portal", "Could not register HTTP route");
+            httpd_stop(server); server = nullptr; return;
+        }
     }
+    ESP_LOGI("bitbot_portal", "Setup portal ready at http://192.168.4.1/");
 }
 void StopPortal() { if (server) { httpd_stop(server); server = nullptr; } }
 }
