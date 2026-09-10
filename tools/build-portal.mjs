@@ -9,6 +9,8 @@ let total = 0;
 for (const [file, symbol] of [['index.html', 'index'], ['style.css', 'style'], ['app.js', 'app']]) {
   const raw = Buffer.from((await readFile(new URL(`../web/${file}`, import.meta.url), 'utf8')).replaceAll('\r\n', '\n'));
   const compressed = gzipSync(raw, { level: 9 });
+  // Gzip records the host OS at byte 9. Use "unknown" for identical Windows/Linux builds.
+  compressed[9] = 255;
   total += compressed.length;
   header += `inline constexpr uint8_t ${symbol}[] = {\n${[...compressed].map((byte, index) => `${index % 24 ? '' : '\n'}${byte},`).join('')}\n};\n`;
   await writeFile(new URL(`../dist/${file}.gz`, import.meta.url), compressed);
