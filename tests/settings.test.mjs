@@ -6,7 +6,7 @@ import { Simulator, initialDocument } from '../lib/simulator.mjs';
 test('Norwegian settings survive save/reload; API responses do not contain keys', async () => {
   let persisted;
   const bot = new Simulator({ persist: async doc => { persisted = structuredClone(doc); } });
-  await bot.save({ settings: { name: 'Blåbær', personality: 'Vær nysgjerrig. Svar på norsk: æ ø å Æ Ø Å.' }, apiKey: 'dummy-secret' });
+  await bot.save({ settings: { name: 'Blåbær', personality: 'Vær nysgjerrig. Svar på norsk: æ ø å Æ Ø Å.', provider: 'gemini' }, apiKey: 'dummy-secret' });
   const reloaded = new Simulator({ document: persisted });
   assert.equal(reloaded.settings().settings.name, 'Blåbær');
   assert.equal(reloaded.settings().hasApiKey, true);
@@ -16,7 +16,7 @@ test('Norwegian settings survive save/reload; API responses do not contain keys'
 });
 
 test('provider keys stay separate; clearing one never removes the others', () => {
-  let doc = updateDocument(initialDocument(), { settings: {}, apiKey: 'gemini-secret' });
+  let doc = updateDocument(initialDocument(), { settings: { provider: 'gemini' }, apiKey: 'gemini-secret' });
   doc = updateDocument(doc, { settings: { provider: 'openai' }, apiKey: 'openai-secret' });
   doc = updateDocument(doc, { settings: { provider: 'gemini' }, clearApiKey: true });
   assert.equal(doc.keys.openai, 'openai-secret');

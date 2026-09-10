@@ -21,12 +21,14 @@ Sources: [XiaoZhi README](https://github.com/78/xiaozhi-esp32),
 
 ## Proposed first voice path
 
-Reuse XiaoZhi's audio/wake-word/transport layer. Start with push-to-talk and
-a gateway that supports separate transcription, conversation, and synthesis.
+Reuse XiaoZhi's audio/wake-word/transport layer. The setup portal defaults to
+XiaoZhi as the simplest first-run choice and does not ask for generic model,
+URL, or API-key fields for that route. Start with push-to-talk and a gateway
+that supports separate transcription, conversation, and synthesis.
 This allows one canonical response to feed both captions and speech, independent
-providers, and meaningful error reporting at each stage. A hosted XiaoZhi trial
-is useful for hardware validation, but its service must pass Norwegian tests
-before becoming the consumer default. A self-hosted gateway is the free-from-
+providers, and meaningful error reporting at each stage. XiaoZhi still needs to
+pass the Norwegian acceptance trial before a release can promise bilingual
+quality. A self-hosted gateway is the free-from-
 per-call-charges option; travelling still requires a reachable gateway.
 
 Cloud vision must be a separate intentional request/tool. Local preview never

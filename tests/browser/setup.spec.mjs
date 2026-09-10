@@ -17,6 +17,14 @@ test('portable setup, persistence, safe text rendering, and responsive layout', 
   await page.goto('/');
   await expect(page.getByText('DESKTOP SIMULATOR', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /Home network/ })).toBeVisible();
+  await expect(page.locator('[name="provider"][value="xiaozhi"]')).toBeChecked();
+  await expect(page.locator('#provider-requirement')).toHaveText('Nothing else to enter for XiaoZhi');
+  await expect(page.locator('#provider-fields')).toBeHidden();
+  await expect(page.locator('[data-panel="connection"]')).toBeVisible();
+  await expect(page.locator('[data-panel="personality"]')).toBeVisible();
+  await expect(page.locator('[data-panel="voice"]')).toBeVisible();
+  await expect(page.locator('[data-panel="device"]')).toBeVisible();
+  await expect(page.locator('#continue-personality')).toBeDisabled();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: `test-results/${info.project.name}-setup.png`, fullPage: true });
 
@@ -26,11 +34,15 @@ test('portable setup, persistence, safe text rendering, and responsive layout', 
   await page.locator('#connect').click();
   await expect(page.locator('#connection-result')).toContainText('Network saved', { timeout: 12000 });
   await expect(page.locator('#saved-networks')).toContainText(ssid);
+  await expect(page.locator('#continue-personality')).toBeEnabled();
   expect(await page.locator('#saved-networks b').count()).toBe(0);
 
   await page.getByRole('button', { name: /Mind & personality/ }).click();
   await page.locator('[name="name"]').fill('Blåbær');
   await page.locator('[name="personality"]').fill('Svar på norsk og engelsk. Vær nysgjerrig: æ ø å Æ Ø Å.');
+  await page.locator('[name="provider"][value="gemini"]').check();
+  await expect(page.locator('#provider-fields')).toBeVisible();
+  await expect(page.locator('#key-status')).toHaveText('Required to use');
   await page.locator('#api-key').fill('dummy-browser-key');
   await page.getByRole('button', { name: /Save preferences/ }).click();
   await expect(page.locator('#notice')).toContainText('Preferences saved');
@@ -38,7 +50,7 @@ test('portable setup, persistence, safe text rendering, and responsive layout', 
   await page.reload();
   await page.getByRole('button', { name: /Mind & personality/ }).click();
   await expect(page.locator('[name="name"]')).toHaveValue('Blåbær');
-  await expect(page.locator('#key-status')).toContainText('key saved');
+  await expect(page.locator('#key-status')).toHaveText('Saved');
   expect(await page.evaluate(() => localStorage.length)).toBe(0);
 
   await page.getByRole('button', { name: /Voice & language/ }).click();

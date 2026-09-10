@@ -3,13 +3,29 @@
   const $ = selector => document.querySelector(selector);
   const $$ = selector => [...document.querySelectorAll(selector)];
   const form = $('#settings-form');
-  const providerHelp = {
-    gemini: 'A cloud option with limited free tiers on eligible models. A Gemini API key is needed for use; quotas and availability depend on your account.',
-    openai: 'A usage-based cloud option. An API key and API billing are required. A chat subscription does not configure this device.',
-    local: 'Use a reachable computer or server. No per-call cloud fee, but Ollama alone does not supply speech recognition and speech synthesis. A voice gateway is needed.',
-    xiaozhi: 'Uses a managed assistant service with account/device pairing. Its model and voice choices may need to be configured on the service. The adapter is not connected yet.',
+  const providerInfo = {
+    xiaozhi: {
+      requirement: 'Nothing else to enter for XiaoZhi',
+      help: 'This is the recommended default. No model ID, service URL, or API key is needed on this page. Account and device pairing will be handled through the XiaoZhi service when its adapter is added.',
+      fields: false,
+    },
+    gemini: {
+      requirement: 'You will need a Gemini API key',
+      help: 'Create a key in Google AI Studio. A free allowance may be available, depending on the model, account, and current quotas. You can add the key later.',
+      model: 'Optional', endpoint: 'Optional', key: 'Required to use', fields: true,
+    },
+    openai: {
+      requirement: 'You will need an OpenAI API key and API billing',
+      help: 'A ChatGPT subscription does not supply an API key or API credit. You can add the key later.',
+      model: 'Optional', endpoint: 'Optional', key: 'Required to use', fields: true,
+    },
+    local: {
+      requirement: 'You will need the address of your own service',
+      help: 'This avoids per-call cloud fees, but a reachable voice gateway is required. Ollama by itself does not provide speech recognition or speech synthesis.',
+      model: 'Optional', endpoint: 'Required to use', key: 'Usually not needed', fields: true,
+    },
   };
-  let token = '', settings = null, dirty = false, busy = false, testing = false, lastJob = '', simulator = false, activePage = 'connection', pollFailures = 0, finished = false;
+  let token = '', settings = null, dirty = false, busy = false, testing = false, lastJob = '', simulator = false, activePage = 'connection', pollFailures = 0, finished = false, savedNetworkCount = 0, keySaved = false;
 
   async function api(path, body) {
     const response = await fetch(`/api/${path}`, {
@@ -29,14 +45,16 @@
   }
   function showPage(name, focus = true) {
     activePage = name;
-    $$('[data-panel]').forEach(panel => { panel.hidden = panel.dataset.panel !== name; });
     $$('.nav-item').forEach(button => {
       const active = button.dataset.page === name;
       button.classList.toggle('active', active);
       if (active) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
     });
-    $('#save-bar').hidden = name === 'connection';
-    if (focus) $(`[data-panel="${name}"] h2`).focus({ preventScroll: true });
+    if (focus) {
+      const heading = $(`[data-panel="${name}"] h2`);
+      heading.focus({ preventScroll: true });
+      heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   }
   function setDirty(value) {
     dirty = value;
@@ -49,7 +67,15 @@
       $(`#${key}-output`).textContent = ['volume', 'brightness'].includes(key) ? `${value}%` : key === 'speed' ? `${value.toFixed(2)}×` : `${value > 0 ? '+' : ''}${value} semitones`;
     }
     const provider = currentProvider();
-    $('#provider-help').textContent = providerHelp[provider];
+    const info = providerInfo[provider];
+    $('#provider-requirement').textContent = info.requirement;
+    $('#provider-help').textContent = info.help;
+    $('#provider-fields').hidden = !info.fields;
+    if (info.fields) {
+      $('#model-status').textContent = info.model;
+      $('#endpoint-status').textContent = info.endpoint;
+      $('#key-status').textContent = keySaved ? 'Saved' : info.key;
+    }
     form.elements.pitch.disabled = provider !== 'local';
     $('#pitch-help').textContent = provider === 'local' ? 'Reserved for a self-hosted TTS adapter with pitch support. The adapter is not connected yet.' : 'Numerical pitch is unavailable for this provider. Its speech adapter may offer style instructions later.';
     $('#preview-name').textContent = form.elements.name.value.trim().toUpperCase() || 'BITBOT';
@@ -63,7 +89,7 @@
     }
     $('#api-key').value = '';
     $('#clear-key').checked = false;
-    $('#key-status').textContent = result.hasApiKey ? 'key saved for this provider' : 'no saved key for this provider';
+    keySaved = result.hasApiKey;
     updateControls();
     setDirty(false);
   }
@@ -92,6 +118,7 @@
     $('#finish').disabled = value || testing;
     $('#connect').disabled = value || testing;
     $('#scan').disabled = value || testing;
+    $('#continue-personality').disabled = value || testing || savedNetworkCount === 0;
   }
   function element(tag, className, content) {
     const node = document.createElement(tag);
@@ -135,7 +162,10 @@
   }
   async function refreshSaved() {
     const networks = await api('networks'); const container = $('#saved-networks'); container.replaceChildren();
+    savedNetworkCount = networks.length;
     $('#saved-count').textContent = `${networks.length} / 5`;
+    $('#continue-personality').disabled = busy || testing || networks.length === 0;
+    $('#connection-next-help').textContent = networks.length ? 'Network saved. You are ready to continue.' : 'Connect and save a network first.';
     if (!networks.length) container.append(element('p', 'hint', 'No networks saved yet.'));
     for (const network of networks) {
       const row = element('div', 'saved-row');
@@ -182,6 +212,7 @@
   }
 
   $$('.nav-item').forEach(button => button.addEventListener('click', () => showPage(button.dataset.page)));
+  $$('[data-continue]').forEach(button => button.addEventListener('click', () => showPage(button.dataset.continue)));
   $('#travel-link').addEventListener('click', () => { showPage('connection'); $('#travel-help').open = true; });
   $('.manual-network').addEventListener('toggle', event => { if (event.target.open) $('#ssid').focus(); });
   $('#scan').addEventListener('click', scan);
@@ -193,7 +224,7 @@
     if (event.target.name === 'provider') {
       if (currentProvider() !== 'local') form.elements.pitch.value = 0;
       $('#api-key').value = ''; $('#clear-key').checked = false;
-      $('#key-status').textContent = 'blank keeps any key saved for this provider';
+      keySaved = false;
     }
     setDirty(true); updateControls();
   });
