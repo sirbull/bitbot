@@ -1,6 +1,6 @@
 # Provider choices and language validation
 
-Research date: 2026-09-08. This milestone saves provider preferences; it does
+Research updated: 2026-09-10. This milestone saves provider preferences; it does
 not make cloud requests or claim tested Norwegian speech. Pricing, free quotas,
 model availability, and account eligibility must be rechecked before activation.
 
@@ -13,6 +13,7 @@ model availability, and account eligibility must be rechecked before activation.
 
 Sources: [XiaoZhi README](https://github.com/78/xiaozhi-esp32),
 [Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing),
+[Gemini Live capabilities](https://ai.google.dev/gemini-api/docs/live-api/capabilities),
 [Gemini speech generation](https://ai.google.dev/gemini-api/docs/speech-generation),
 [OpenAI speech generation](https://developers.openai.com/api/docs/guides/text-to-speech),
 [OpenAI transcription](https://developers.openai.com/api/docs/guides/speech-to-text),
@@ -52,3 +53,26 @@ Do not store voice recordings unless the person testing explicitly agrees.
 Pitch is only enabled when the chosen TTS adapter advertises it; changing the
 playback sample rate is not a pitch-only control. Model IDs and voice IDs remain
 editable to avoid a stale hard-coded catalogue.
+
+## Language catalogue behavior
+
+The portal stores a BCP-47 language preference rather than a closed three-value
+enum. `Automatic · Norwegian + English` remains the default, while
+`Automatic · any supported language` and specific languages support an
+international release. The visible list follows the selected route:
+
+- XiaoZhi uses the upstream firmware locale list. This is a device-interface
+  capability; final conversation and voice availability still depends on the
+  XiaoZhi service configuration.
+- Gemini uses the documented Live API catalogue by default and switches to the
+  documented TTS catalogue when the model ID contains `tts`.
+- OpenAI uses the documented TTS output-language catalogue because spoken
+  output is the limiting part of the planned STT + LLM + TTS chain.
+- Self-hosted shows the union of known language tags as candidates. Its future
+  adapter must replace or confirm that list from the selected gateway.
+
+The bundled catalogue is a commissioning fallback, not a permanent claim about
+rapidly changing services. Provider adapters should report model, voice, and
+language capabilities at runtime once those integrations exist. Unknown but
+valid BCP-47 values remain loadable so third-party adapters can add languages
+without migrating stored settings.

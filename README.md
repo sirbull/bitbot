@@ -2,7 +2,8 @@
 
 A small portable AI companion for the **Seeed XIAO ESP32-S3 Sense**, with a
 **7-pin ST7789 240×240** display, camera, microphone, and speaker. Norwegian
-and English are core requirements.
+and English are the default pair, with an international BCP-47 language
+preference for open-source provider and speech adapters.
 
 **Current milestone: commissioning and hardware bring-up.** The English setup
 portal, Wi-Fi profiles, settings storage, and optional ST7789 test renderer

@@ -44,6 +44,20 @@ static bool ServiceUrl(const std::string& url) {
     const auto authority = url.substr(start, url.find('/', start) - start);
     return !authority.empty() && authority.find_first_of("@?# \\\t\n\r") == std::string::npos && url.find_first_of("?# \\\t\n\r") == std::string::npos;
 }
+static bool LanguageTag(const char* value) {
+    if (!strcmp(value, "auto") || !strcmp(value, "auto-all")) return true;
+    size_t segment = 0, segments = 0;
+    for (const unsigned char* p = reinterpret_cast<const unsigned char*>(value);; ++p) {
+        if (*p == '-' || *p == 0) {
+            if (segment == 0 || segment > 8 || (segments == 0 && segment < 2)) return false;
+            ++segments; segment = 0;
+            if (*p == 0) return true;
+            continue;
+        }
+        if ((segments == 0 && !std::isalpha(*p)) || (segments > 0 && !std::isalnum(*p))) return false;
+        ++segment;
+    }
+}
 bool ValidateSettings(const cJSON* input, std::string& error) {
     if (!cJSON_IsObject(input)) { error = "Settings must be an object."; return false; }
     Json schema(cJSON_Parse(kSettingsSchema));
@@ -65,6 +79,7 @@ bool ValidateSettings(const cJSON* input, std::string& error) {
                     for (const auto* option = values->child; option; option = option->next) if (strcmp(item->valuestring, option->valuestring) == 0) valid = true;
                 }
                 if (type == "url" && length) valid = valid && ServiceUrl(item->valuestring);
+                if (!strcmp(Text(rule, "format"), "language")) valid = valid && LanguageTag(item->valuestring);
             }
         } else if (type == "boolean") valid = cJSON_IsBool(item);
         else {

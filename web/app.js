@@ -25,6 +25,15 @@
       model: 'Optional', endpoint: 'Required to use', key: 'Usually not needed', fields: true,
     },
   };
+  const languageCatalogs = {
+    xiaozhi: 'zh,zh-Hant,en,ja,ko,vi,th,de,fr,es,it,ru,ar,hi,mr,pt,pt-BR,pl,cs,fi,tr,id,uk,ro,bg,ca,da,el,fa,fil,he,hr,hu,ms,nb,nl,sk,sl,sv,sr'.split(','),
+    geminiLive: 'af,ak,sq,am,ar,hy,as,az,eu,be,bn,bs,bg,my,ca,ceb,zh,hr,cs,da,nl,en,et,fo,fil,fi,fr,gl,ka,de,el,gu,ha,he,hi,hu,is,id,ga,it,ja,kn,kk,km,rw,ko,ku,ky,lo,lv,lt,mk,ms,ml,mt,mi,mn,mr,ne,no,or,om,ps,fa,pl,pt,pa,qu,ro,rm,ru,sr,sd,si,sk,sl,so,st,es,sw,sv,tg,ta,te,th,tn,tr,tk,uk,ur,uz,vi,cy,fy,wo,yo,zu'.split(','),
+    geminiTts: 'ar,bn,nl,en,fr,de,hi,id,it,ja,ko,mr,pl,pt,ro,ru,es,ta,te,th,tr,uk,vi,af,sq,am,hy,az,eu,be,bg,my,ca,ceb,cmn,hr,cs,da,et,fil,fi,gl,ka,el,gu,ht,he,hu,is,jv,kn,kok,lo,la,lv,lt,lb,mk,mai,mg,ms,ml,mn,ne,nb,nn,or,ps,fa,pa,sr,sd,si,sk,sl,sw,sv,ur'.split(','),
+    openai: 'af,ar,hy,az,be,bs,bg,ca,zh,hr,cs,da,nl,en,et,fi,fr,gl,de,el,he,hi,hu,is,id,it,ja,kn,kk,ko,lv,lt,mk,ms,mr,mi,ne,no,fa,pl,pt,ro,ru,sr,sk,sl,es,sw,sv,tl,ta,th,tr,uk,ur,vi,cy'.split(','),
+  };
+  languageCatalogs.local = [...new Set([...languageCatalogs.geminiLive, ...languageCatalogs.geminiTts, ...languageCatalogs.openai, ...languageCatalogs.xiaozhi])];
+  const languageNames = typeof Intl.DisplayNames === 'function' ? new Intl.DisplayNames(['en'], { type: 'language' }) : null;
+  const languageFallbacks = { nb: 'Norwegian Bokmål', nn: 'Norwegian Nynorsk', no: 'Norwegian', fil: 'Filipino', cmn: 'Chinese, Mandarin', 'zh-Hant': 'Chinese, Traditional' };
   let token = '', settings = null, dirty = false, busy = false, testing = false, lastJob = '', simulator = false, activePage = 'connection', pollFailures = 0, finished = false, savedNetworkCount = 0, keySaved = false;
 
   async function api(path, body) {
@@ -61,6 +70,43 @@
     $('#save-state').textContent = dirty ? 'You have unsaved preferences' : 'All changes saved';
   }
   function currentProvider() { return form.elements.provider.value; }
+  function languageProfile() {
+    const provider = currentProvider();
+    const model = form.elements.model.value.trim().toLowerCase();
+    if (provider === 'xiaozhi') return { codes: languageCatalogs.xiaozhi, label: 'XiaoZhi firmware locales', note: `XiaoZhi offers ${languageCatalogs.xiaozhi.length} device locales. Spoken output also depends on the voice configured in the XiaoZhi service.` };
+    if (provider === 'gemini' && model.includes('tts')) return { codes: languageCatalogs.geminiTts, label: 'Gemini TTS languages', note: `This Gemini TTS catalog contains ${languageCatalogs.geminiTts.length} documented output languages for current TTS models.` };
+    if (provider === 'gemini') return { codes: languageCatalogs.geminiLive, label: 'Gemini Live languages', note: `Gemini Live documents ${languageCatalogs.geminiLive.length} languages. Native audio detects language automatically; the preference is supplied as an instruction.` };
+    if (provider === 'openai') return { codes: languageCatalogs.openai, label: 'OpenAI speech languages', note: `OpenAI documents ${languageCatalogs.openai.length} TTS languages. Voice quality varies, and current voices are optimized for English.` };
+    return { codes: languageCatalogs.local, label: 'Languages for a custom adapter', note: 'A self-hosted model has no universal language list. These common BCP-47 choices are available as preferences; the future adapter will replace them with capabilities reported by your voice gateway.' };
+  }
+  function updateLanguageOptions() {
+    const select = form.elements.language;
+    const selected = select.value || settings?.language || 'auto';
+    const profile = languageProfile();
+    select.replaceChildren();
+    const automatic = document.createElement('optgroup'); automatic.label = 'Automatic';
+    for (const [value, label] of [['auto', 'Automatic · Norwegian + English'], ['auto-all', 'Automatic · any supported language']]) {
+      const option = document.createElement('option'); option.value = value; option.textContent = label; automatic.append(option);
+    }
+    const supported = document.createElement('optgroup'); supported.label = profile.label;
+    const codes = [...profile.codes].sort((a, b) => {
+      const aName = languageFallbacks[a] || languageNames?.of(a) || a;
+      const bName = languageFallbacks[b] || languageNames?.of(b) || b;
+      return aName.localeCompare(bName, 'en');
+    });
+    for (const code of codes) {
+      const option = document.createElement('option'); option.value = code;
+      option.textContent = `${languageFallbacks[code] || languageNames?.of(code) || code.toUpperCase()} · ${code}`;
+      supported.append(option);
+    }
+    select.append(automatic, supported);
+    if (![...select.options].some(option => option.value === selected)) {
+      const custom = document.createElement('option'); custom.value = selected; custom.textContent = `${selected} · saved, support not verified`;
+      select.append(custom);
+    }
+    select.value = selected;
+    $('#language-support-note').textContent = profile.note;
+  }
   function updateControls() {
     for (const key of ['volume', 'brightness', 'speed', 'pitch']) {
       const value = Number(form.elements[key].value);
@@ -91,6 +137,7 @@
     $('#clear-key').checked = false;
     keySaved = result.hasApiKey;
     updateControls();
+    updateLanguageOptions();
     setDirty(false);
   }
   function collectSettings() {
@@ -227,6 +274,7 @@
       keySaved = false;
     }
     setDirty(true); updateControls();
+    if (event.target.name === 'provider' || event.target.name === 'model') updateLanguageOptions();
   });
   form.addEventListener('submit', async event => {
     event.preventDefault(); if (busy) return;
@@ -263,7 +311,7 @@
     finally { if (!finished) setBusy(false); }
   });
   $('#greet').addEventListener('click', () => {
-    $('#face-caption').textContent = form.elements.language.value === 'en' ? 'Nice to meet you!' : 'Hei, hyggelig å møte deg!';
+    $('#face-caption').textContent = ['nb', 'nn', 'no'].includes(form.elements.language.value) ? 'Hei, hyggelig å møte deg!' : 'Nice to meet you!';
     $('#robot').classList.add('greeting');
     setTimeout(() => { $('#robot').classList.remove('greeting'); $('#face-caption').textContent = 'Hello, world.'; }, 2600);
   });

@@ -96,10 +96,11 @@
 
             <section class="setup-step" data-panel="voice" aria-labelledby="voice-title">
               <div class="section-heading"><div><div class="eyebrow">03 / FIND ITS VOICE</div><h2 id="voice-title" tabindex="-1">Sounds like your BitBot.</h2></div></div>
-              <p class="section-intro">Make room for both languages. Adjust how your companion will speak when the audio integration is ready.</p>
+              <p class="section-intro">Choose how your companion should handle language. The available choices follow the selected AI and speech route.</p>
               <p class="integration-note">These are saved preferences. This build does not yet record or play audio.</p>
-              <label>Conversation language<select name="language"><option value="auto">Automatic · Norwegian & English</option><option value="nb">Prefer Norwegian</option><option value="en">Prefer English</option></select></label>
-              <p class="hint">Automatic asks BitBot to reply in the language you use. The setup page stays in English.</p>
+              <label>Preferred conversation language<select name="language" aria-describedby="language-hint language-support-note"><option value="auto">Automatic · Norwegian + English</option><option value="auto-all">Automatic · any supported language</option></select></label>
+              <p class="hint" id="language-hint">The default detects Norwegian and English. Choose another language to prefer it, or allow automatic switching across every language supported by the selected route. The setup page stays in English.</p>
+              <p class="language-support" id="language-support-note"></p>
               <label>Voice ID <span class="optional">optional</span><input name="voice" maxlength="80" placeholder="Use the selected speech service's default"></label><p class="hint">Voice names depend on the speech provider. Availability will be checked when the adapter is connected.</p>
               <label class="range-label">Speaker volume<output id="volume-output"></output><input name="volume" type="range" min="0" max="100" step="1"></label>
               <label class="range-label">Speaking speed<output id="speed-output"></output><input name="speed" type="range" min="0.75" max="1.25" step="0.05"></label>

@@ -25,6 +25,9 @@ test('portable setup, persistence, safe text rendering, and responsive layout', 
   await expect(page.locator('[data-panel="voice"]')).toBeVisible();
   await expect(page.locator('[data-panel="device"]')).toBeVisible();
   await expect(page.locator('#continue-personality')).toBeDisabled();
+  await expect(page.locator('[name="language"]')).toHaveValue('auto');
+  expect(await page.locator('[name="language"] option').count()).toBeGreaterThan(35);
+  await expect(page.locator('#language-support-note')).toContainText('XiaoZhi');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: `test-results/${info.project.name}-setup.png`, fullPage: true });
 
@@ -43,6 +46,11 @@ test('portable setup, persistence, safe text rendering, and responsive layout', 
   await page.locator('[name="provider"][value="gemini"]').check();
   await expect(page.locator('#provider-fields')).toBeVisible();
   await expect(page.locator('#key-status')).toHaveText('Required to use');
+  expect(await page.locator('[name="language"] option').count()).toBeGreaterThan(90);
+  await expect(page.locator('#language-support-note')).toContainText('Gemini Live');
+  await page.locator('[name="model"]').fill('gemini-2.5-flash-preview-tts');
+  await expect(page.locator('#language-support-note')).toContainText('Gemini TTS catalog');
+  await page.locator('[name="language"]').selectOption('sv');
   await page.locator('#api-key').fill('dummy-browser-key');
   await page.getByRole('button', { name: /Save preferences/ }).click();
   await expect(page.locator('#notice')).toContainText('Preferences saved');
@@ -51,6 +59,7 @@ test('portable setup, persistence, safe text rendering, and responsive layout', 
   await page.getByRole('button', { name: /Mind & personality/ }).click();
   await expect(page.locator('[name="name"]')).toHaveValue('Blåbær');
   await expect(page.locator('#key-status')).toHaveText('Saved');
+  await expect(page.locator('[name="language"]')).toHaveValue('sv');
   expect(await page.evaluate(() => localStorage.length)).toBe(0);
 
   await page.getByRole('button', { name: /Voice & language/ }).click();

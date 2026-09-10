@@ -25,9 +25,12 @@ test('provider keys stay separate; clearing one never removes the others', () =>
 });
 
 test('server enforces byte limits, type limits, URLs, and capabilities', () => {
-  const invalid = [{ name: ' ' }, { name: 'å'.repeat(25) }, { volume: 101 }, { volume: '50' }, { idleSeconds: 15.5 }, { captions: 'true' }, { provider: 'invented' }, { pitch: 2 }, { endpoint: 'javascript:alert(1)' }, { endpoint: 'https://key:secret@example.com' }, { endpoint: 'https://example.com?key=secret' }, { endpoint: 'http://example.com' }, { unknown: 5 }, { name: 'a\0b' }];
+  const invalid = [{ name: ' ' }, { name: 'å'.repeat(25) }, { volume: 101 }, { volume: '50' }, { idleSeconds: 15.5 }, { captions: 'true' }, { provider: 'invented' }, { language: 'en_US' }, { language: '../en' }, { pitch: 2 }, { endpoint: 'javascript:alert(1)' }, { endpoint: 'https://key:secret@example.com' }, { endpoint: 'https://example.com?key=secret' }, { endpoint: 'http://example.com' }, { unknown: 5 }, { name: 'a\0b' }];
   for (const patch of invalid) assert.throws(() => validateSettings(patch), JSON.stringify(patch));
   assert.equal(validateSettings({ provider: 'local', endpoint: 'http://192.168.1.4:8080', pitch: -3 }).pitch, -3);
+  assert.equal(validateSettings({ language: 'pt-BR' }).language, 'pt-BR');
+  assert.equal(validateSettings({ language: 'zh-Hant-TW' }).language, 'zh-Hant-TW');
+  assert.equal(validateSettings({ language: 'auto-all' }).language, 'auto-all');
   assert.deepEqual(validateSettings({}), defaults());
 });
 
