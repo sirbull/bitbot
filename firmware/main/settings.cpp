@@ -1,6 +1,7 @@
 #include "bitbot.h"
 #include "generated/settings_schema.h"
 #include <cmath>
+#include <cctype>
 #include <cstring>
 #include <esp_random.h>
 #include <nvs.h>
@@ -94,14 +95,14 @@ bool ValidateNetwork(const cJSON* input, Network& network, std::string& error) {
 bool Commit(cJSON* candidate) {
     const auto serialized = Print(candidate);
     if (serialized.empty() || serialized.size() > kMaxBody) return false;
+    cJSON* copy = cJSON_Duplicate(candidate, true);
+    if (!copy) return false;
     nvs_handle_t handle;
-    if (nvs_open("bitbot", NVS_READWRITE, &handle) != ESP_OK) return false;
+    if (nvs_open("bitbot", NVS_READWRITE, &handle) != ESP_OK) { cJSON_Delete(copy); return false; }
     esp_err_t result = nvs_set_str(handle, "document", serialized.c_str());
     if (result == ESP_OK) result = nvs_commit(handle);
     nvs_close(handle);
-    if (result != ESP_OK) return false;
-    cJSON* copy = cJSON_Duplicate(candidate, true);
-    if (!copy) return false;
+    if (result != ESP_OK) { cJSON_Delete(copy); return false; }
     cJSON_Delete(shared.document); shared.document = copy;
     return true;
 }
@@ -132,7 +133,7 @@ bool LoadSettings() {
     const auto* networks = cJSON_GetObjectItemCaseSensitive(doc.value, "networks");
     const auto* keys = cJSON_GetObjectItemCaseSensitive(doc.value, "keys");
     std::string error;
-    if (!cJSON_IsNumber(version) || version->valueint != 1 || !ValidateSettings(settings, error) || !cJSON_IsArray(networks) || cJSON_GetArraySize(networks) > 5 || !cJSON_IsObject(keys) || strlen(Text(doc.value, "setupPassword")) != 16) return false;
+    if (!cJSON_IsNumber(version) || version->valuedouble != 1 || !ValidateSettings(settings, error) || !cJSON_IsArray(networks) || cJSON_GetArraySize(networks) > 5 || !cJSON_IsObject(keys) || strlen(Text(doc.value, "setupPassword")) != 16) return false;
     Json defaults(cJSON_Parse(kDefaults));
     for (auto* item = defaults.value->child; item; item = item->next) if (!cJSON_GetObjectItemCaseSensitive(settings, item->string)) return false;
     for (const auto* network = networks->child; network; network = network->next) { Network parsed; if (!ValidateNetwork(network, parsed, error)) return false; }
