@@ -23,10 +23,12 @@
    preferences/keys survive. Check AP closes, BOOT reopens it, and known-network
    connection recovers. Test from Android/iOS captive browsers and ordinary
    Chrome/Safari. Verify configuration is inaccessible from the joined LAN.
-2. **Electrical verification.** Identify VCC/BLK circuitry, charger module,
-   speaker impedance/power, and battery current limits. Keep battery/charger
-   wiring disconnected until verified. A confirmed absent CS frees GPIO6 for
-   ADC, but does not verify a power circuit.
+2. **Electrical verification.** Identify VCC/BLK circuitry and speaker
+   impedance/power. Bench-test the identified FM5324GA/IP5306-clone power
+   module on its own — charge current into a cell, and whether its 5 V output
+   survives a ~30 mA load — and pick the cell from that result. Keep
+   battery/module wiring off the XIAO until then. A confirmed absent CS frees
+   GPIO6 for ADC, but does not verify a power circuit.
 3. **Physical display test.** Enable the menuconfig option. Verify full 240×240
    area, RGB bars, inversion, row offset, and blink timing. Then add an original
    face renderer with setup instructions, WPA2 setup password, and readable
@@ -44,6 +46,7 @@
 7. **Intentional camera vision and power.** Preview locally; only upload an
    image on a visual request. Add timeouts and camera teardown. Measure current
    in each state before enabling aggressive sleep or estimating battery life.
+   The power module's low-load cutoff may put a floor under the sleep states.
 
 ## What automated checks establish
 

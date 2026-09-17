@@ -13,9 +13,9 @@ BitBot has no motors, servos or wheels.
 | 5 | Microphone | INMP441 digital MEMS microphone, 1.8–3.3 V | 1 | I2S | Module pinout must be verified |
 | 6 | Audio amplifier | MAX98357A I2S class D module, 2.5–5.5 V | 1 | I2S | Gain/SD connection must be verified |
 | 7 | Speaker | Rectangular, approx. 15 × 11 × 3.5–4 mm | 1 | Differential output from MAX98357A | Impedance and power unknown |
-| 8 | Battery | 10440 Li-ion, 3.7 V nominal, approx. 350 mAh | 1 | — | Planned |
-| 9 | Charger/power module | USB-C Li-ion module (USB-C in, BAT+/−, OUT+/−) | 1 | — | Purchased; model and specifications unknown |
-| 10 | Power switch | Self-locking on/off push button, 12 × 8 mm, rated 30 V / 1 A | 1 | — | Purchased |
+| 8 | Battery | 1S Li-ion, protected. 10440 (approx. 350 mAh) is planned but likely too small for this module — see hardware.md | 1 | Module BAT+/BAT− | Cell choice under review |
+| 9 | Charger/boost module | Type-C USB boost converter, 5 V 2 A step-up + 1S Li-ion charger/protection, 4-LED gauge. IC marked **FM5324GA** (IP5306 clone). Pads: USB-C in, BAT+, BAT−, 5V OUT+, OUT−, K (unusable), charge-voltage trim | 1 | 5 V rail | Purchased and identified; charge current and boost behaviour must be measured |
+| 10 | Power switch | Self-locking on/off push button, 12 × 8 mm, rated 30 V / 1 A | 1 | In module 5V OUT+ line | Purchased |
 | 11 | Resistors (battery sensing) | 100 kΩ, 1 % | 2 | Voltage divider to ADC1 (GPIO6) | Planned |
 | 12 | Capacitor (filter) | approx. 100 nF, ADC node to GND | 1 | — | Optional |
 | 13 | Setup button | Built-in BOOT button (GPIO0) | — | GPIO | Confirmed, part of XIAO |
@@ -27,7 +27,9 @@ BitBot has no motors, servos or wheels.
 
 ## Open items
 
-- Exact model and topology of the charger module.
+- Charger module: actual charge current into the cell, and whether the boost
+  output starts by itself and stays on at BitBot's idle current. The K pad is
+  labelled unusable on this board, so there is no button to restart the boost.
 - The display module's voltage regulator and backlight current (possibly a transistor for BLK).
 - The speaker's impedance and power rating.
 - Which camera sensor is actually fitted.

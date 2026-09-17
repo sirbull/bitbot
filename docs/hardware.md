@@ -80,11 +80,36 @@ clocks. USB serial remains available on GPIO19/20.
 - **Battery:** proposed 100k/100k divider gives 2.1 V at the ADC for 4.2 V cell
   voltage; add filtering and calibrate the ADC. Power wiring remains TBD. Use a
   measured Li-ion curve, not a linear percentage. No runtime is established.
-- **Charging:** identify the purchased USB-C module, charge current, protection,
-  output voltage, boost/load-sharing topology, and cell charge rating. Do not
-  combine two chargers or feed unknown output into 3V3/5V/BAT pads. Charging
-  while switched off depends on those facts. Begin bring-up on USB with the
-  external battery/power module disconnected.
+- **Charging / 5 V supply (identified 2026-09-17):** the purchased module is a
+  Type-C USB boost converter with a 1S Li-ion charger, protection and a 4-LED
+  gauge, built on an IC marked **FM5324GA** — an IP5306 clone. Datasheet
+  behaviour for the family: 4.2 V CC/CV charge, up to ~2 A charge current,
+  5 V boost output rated 2 A, over-charge/over-discharge/short protection, and
+  a key input for on/off that this board marks unusable. Pads: USB-C in,
+  BAT+, BAT−, 5V OUT+, OUT−, K, and a charge-voltage trim point. BAT− and OUT−
+  are one node, so the whole system shares a ground. Topology is boost, not
+  load-sharing: the 5 V rail is generated from the cell, and the cell charges
+  from USB-C, which is what makes charge-while-off work. Wiring follows from
+  that and is drawn in [wiring.md](wiring.md): module BAT pads own the cell,
+  OUT+ through the latching switch to the XIAO 5V pad and the amp's VIN, the
+  XIAO's own BAT+/BAT− pads left empty, and the ADC divider still on the cell.
+  Two things must be measured on the bench before the cell is trusted:
+  - **Charge current versus cell size.** A 350 mAh 10440 at this family's
+    default charge current is roughly 6C — far outside the cell's rating. Meter
+    the actual current into a cell first. If it is above ~0.35 A, use a larger
+    cell (a 1000 mAh+ 18650 or an 18650-class pouch puts the module in its
+    intended range) or a charger whose current can be set. Do not "try it and
+    watch". The trim point adjusts charge voltage, not current.
+  - **Boost auto-shutdown threshold.** IP5306-family parts drop the 5 V output
+    when the load falls below roughly 45–100 mA for about 32 s. BitBot awake
+    with the display on should stay above that; BitBot in deep sleep will not.
+    With no usable K pad, recovery then depends on the board's auto-load
+    detection, which has to be confirmed by experiment. If it does not recover,
+    aggressive sleep is off the table for this module and the power budget has
+    to be built around a light-sleep floor instead.
+  Do not plug the XIAO's USB-C in while the switch is on: its 5V pad is VBUS
+  with no blocking diode. Begin bring-up on the XIAO's USB with the module
+  disconnected.
 
 ## Bring-up sequence
 
@@ -93,4 +118,6 @@ clocks. USB serial remains available on GPIO19/20.
 3. ST7789 solid colors, rotation, readable `æ ø å Æ Ø Å`, blink/face demo.
 4. Test microphone capture and amplifier output separately at low volume.
 5. Camera one-frame capture and release; no network upload.
-6. Battery ADC calibration, verified power path, then combined load/current test.
+6. Power module alone: charge current into a cell, termination, 5 V under load,
+   and the output's behaviour at ~30 mA. Decide the cell from that result.
+7. Battery ADC calibration, verified power path, then combined load/current test.

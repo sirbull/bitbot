@@ -193,21 +193,41 @@ current consumption once the prototype works.
 
 ### Charging / power module
 
-A USB-C Li-ion charging/power module has been purchased.
+Identified 2026-09-17. The purchased module is a **Type-C USB boost
+converter, 5 V 2 A step-up with 1S Li-ion charging/protection and a
+4-LED gauge**, built on an IC marked **FM5324GA**, a clone of the
+**IP5306**.
 
-Known visible connections from the purchased module include:
+Pads:
 
--   USB-C input;
--   battery positive;
--   battery negative;
--   output positive;
--   output negative.
+-   USB-C input (BitBot's charging port);
+-   battery positive / battery negative;
+-   5 V output positive / output negative;
+-   external key pad `K`, marked as not connectable on this board;
+-   charge-voltage trim point.
 
-**The exact module model, output voltage, charging current, protection
-features, and topology must be verified before final power wiring is
-approved.**
+Topology is boost, not load-sharing: the 5 V rail is generated from the
+cell while the cell charges from USB-C, so charging while BitBot is
+switched off works. `BAT-` and `OUT-` are the same node, giving the
+system one common ground.
 
-Do not guess these specifications.
+The 5 V output becomes BitBot's supply rail: through the latching switch
+to the XIAO's 5V pad and to the MAX98357A's VIN. **The module is the
+only charger.** The XIAO's own `BAT+`/`BAT-` pads stay unconnected, and
+the XIAO's USB-C must not be plugged in while the switch is on.
+
+Two module characteristics remain to be measured on the bench, and both
+can change component choices:
+
+-   **actual charge current into a cell.** The family's default is close
+    to 2 A, which is roughly 6C for a 350 mAh 10440 and unsafe. A larger
+    cell or a current-limited charger may be required.
+-   **boost auto-shutdown at low load.** The family cuts its output below
+    roughly 45--100 mA. With no usable key pad, this may rule out deep
+    sleep.
+
+See `docs/hardware.md` for the test procedure and `docs/wiring.md` for
+the wiring.
 
 ### Main power switch
 
