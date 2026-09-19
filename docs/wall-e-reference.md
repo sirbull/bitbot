@@ -30,6 +30,7 @@ firmware installation, ST7789 compatibility, and a real trained wake word.
 BitBot has no motors and uses its own face design.
 
 The owner subsequently confirmed the actual display as **ST7789 240×240** with
-**GND, VCC, SCK, SDA, RES, DC, BLK**, in that order. This owner-provided pin list,
-together with Seeed's MCU pin map and Espressif's LCD driver, is the basis of
-BitBot's no-CS display implementation; the opaque factory binary is not.
+**GND, VCC, SCL, SDA, RST, DC, CS, BL** (verified on hardware 2026-09-19; an
+earlier 7-pin, no-CS note was wrong). This pin list, together with Seeed's MCU
+pin map and Espressif's LCD driver, is the basis of BitBot's display
+implementation; the opaque factory binary is not.

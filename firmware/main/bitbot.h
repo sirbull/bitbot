@@ -8,7 +8,8 @@
 #include <esp_netif.h>
 
 namespace bitbot {
-constexpr int kSetupButton = 0;  // Seeed onboard BOOT, never an external pin.
+constexpr int kSetupButton = 0;          // Seeed onboard BOOT.
+constexpr int kExternalSetupButton = 3;  // D2: optional button to GND. Strapping only with STRAP_JTAG_SEL burned (not by default).
 constexpr size_t kMaxBody = 12288;
 constexpr int64_t kSetupMs = 10 * 60 * 1000;
 enum class State { Booting, Setup, Connecting, Idle, Offline, Error };

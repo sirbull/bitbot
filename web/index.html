@@ -75,8 +75,11 @@
               <div class="section-heading"><div><div class="eyebrow">02 / A MIND OF ITS OWN</div><h2 id="personality-title" tabindex="-1">Give it some character.</h2></div></div>
               <p class="section-intro">A thoughtful sidekick, a cheerful storyteller, or a very serious little scientist. You decide.</p>
               <p class="integration-note">Preferences are saved on the device. AI conversation is part of the next development milestone.</p>
+              <p class="integration-note" data-cloud-note hidden>With XiaoZhi, the name, personality, language and voice are set in the XiaoZhi console at xiaozhi.me, not here.</p>
+              <div data-cloud>
               <label>Companion name<input name="name" maxlength="48" required></label>
               <label>Personality<textarea name="personality" rows="6" maxlength="2000" aria-describedby="personality-hint"></textarea></label><p class="hint" id="personality-hint">Describe its tone, interests, and how it should answer. Norwegian or English is fine.</p>
+              </div>
               <div class="field-heading"><h3>Choose its AI</h3><span class="mono muted">CHANGE ANYTIME</span></div>
               <div class="provider-grid" role="group" aria-label="AI provider">
                 <label class="provider-card recommended"><span class="recommendation mono">DEFAULT</span><input type="radio" name="provider" value="xiaozhi"><span class="provider-top">XiaoZhi<span class="provider-mark">✳</span></span><span class="provider-caption">XiaoZhi account required · no API key</span></label>
@@ -98,6 +101,8 @@
               <div class="section-heading"><div><div class="eyebrow">03 / FIND ITS VOICE</div><h2 id="voice-title" tabindex="-1">Sounds like your BitBot.</h2></div></div>
               <p class="section-intro">Choose how your companion should handle language and speech. Speech can come from the selected AI service or from a separate provider.</p>
               <p class="integration-note">The desktop simulator can play a clearly labelled sample with a voice installed on this computer. Exact provider previews will use the robot's speech adapter when audio is integrated.</p>
+              <p class="integration-note" data-cloud-note hidden>With XiaoZhi, the name, personality, language and voice are set in the XiaoZhi console at xiaozhi.me, not here.</p>
+              <div data-cloud>
               <label>Speech service<select name="speechProvider" id="speech-provider" aria-describedby="speech-service-help"><option value="same">Same as the selected AI service</option><option value="xiaozhi">XiaoZhi</option><option value="gemini">Gemini TTS</option><option value="openai">OpenAI TTS</option><option value="local">Self-hosted voice gateway</option></select></label>
               <div class="provider-guidance speech-guidance"><strong id="speech-requirement"></strong><p id="speech-service-help"></p><a id="speech-action" class="service-link" target="_blank" rel="noopener noreferrer"></a></div>
               <div id="speech-fields" hidden>
@@ -120,9 +125,12 @@
                 <button class="button" id="preview-voice" type="button"><span aria-hidden="true">&#9654;</span> Preview voice</button>
               </div>
               <p class="hint preview-status" id="voice-preview-status" role="status">Loading preview support…</p>
+              </div>
               <label class="range-label">Speaker volume<output id="volume-output"></output><input name="volume" type="range" min="0" max="100" step="1"></label>
+              <div data-cloud>
               <label class="range-label">Speaking speed<output id="speed-output"></output><input name="speed" type="range" min="0.75" max="1.25" step="0.05"></label>
               <label class="range-label">Voice pitch<output id="pitch-output"></output><input name="pitch" type="range" min="-6" max="6" step="1"></label><p class="hint" id="pitch-help">Pitch requires a self-hosted speech adapter that supports it.</p>
+              </div>
               <label class="checkbox-label"><input name="captions" type="checkbox">Show captions while speaking</label><p class="hint">The planned display uses the same response text as speech, including Norwegian characters.</p>
               <div class="step-action"><div><span class="mono">NEXT STEP</span><strong>Check the device</strong><p>These choices can be adjusted later.</p></div><button class="button dark" data-continue="device" type="button">Continue <span aria-hidden="true">↓</span></button></div>
             </section>

@@ -23,24 +23,23 @@
    preferences/keys survive. Check AP closes, BOOT reopens it, and known-network
    connection recovers. Test from Android/iOS captive browsers and ordinary
    Chrome/Safari. Verify configuration is inaccessible from the joined LAN.
-2. **Electrical verification.** Identify VCC/BLK circuitry and speaker
+2. **Electrical verification.** Identify VCC/BL circuitry and speaker
    impedance/power. Bench-test the identified FM5324GA/IP5306-clone power
    module on its own — charge current into a cell, and whether its 5 V output
    survives a ~30 mA load — and pick the cell from that result. Keep
-   battery/module wiring off the XIAO until then. A confirmed absent CS frees
-   GPIO6 for ADC, but does not verify a power circuit.
+   battery/module wiring off the XIAO until then.
 3. **Physical display test.** Enable the menuconfig option. Verify full 240×240
    area, RGB bars, inversion, row offset, and blink timing. Then add an original
    face renderer with setup instructions, WPA2 setup password, and readable
    Norwegian UTF-8 captions. Keep its API separate from conversation logic.
-4. **Audio/camera/ADC independently.** Verify the proposed shared I2S clocks
+4. **Audio/camera independently.** Verify the proposed shared I2S clocks
    and matching sample formats. Record microphone PCM locally, test amplifier
-   at low volume, capture/release one camera frame, and calibrate ADC1 GPIO6.
+   at low volume, and capture/release one camera frame.
 5. **XiaoZhi integration.** Pin a tested upstream revision; keep BitBot board,
    face and commissioning code isolated. Migrate settings explicitly; do not
    silently overwrite upstream Wi-Fi namespaces or copy the AI Pin binary.
 6. **First bilingual conversation.** Push-to-talk first, then STT → model/tool
-   → one canonical response → captions and TTS. Add time/battery/preview tools,
+   → one canonical response → captions and TTS. Add time/preview tools,
    validate provider capabilities and costs. Implement "Hey BitBot" only when
    its actual model is available and tested.
 7. **Intentional camera vision and power.** Preview locally; only upload an
@@ -64,7 +63,7 @@ results here when hardware is available; do not label them tested in advance.
 
 - Saved AI/voice/display preferences are mostly contracts for later adapters.
   No AI calls, audio capture/playback, cloud vision, wake-word engine, captions,
-  backlight dimming, NTP/local tools, or battery sampling yet.
+  backlight dimming, or NTP/local tools yet. There is no battery sensing.
 - The physical setup password is output to the USB console for bring-up; screen
   presentation and a polished no-computer first-boot experience are next.
 - Endpoint validation does not prove an endpoint is compatible/reachable. The

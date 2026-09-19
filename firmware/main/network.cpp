@@ -45,6 +45,11 @@ void InitNetwork() {
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     sta_netif = esp_netif_create_default_wifi_sta();
     ap_netif = esp_netif_create_default_wifi_ap();
+    // DHCP option 114 (RFC 8910): phones open the setup page without probing.
+    static char portal_uri[] = "http://192.168.4.1/";
+    esp_netif_dhcps_stop(ap_netif);
+    esp_netif_dhcps_option(ap_netif, ESP_NETIF_OP_SET, ESP_NETIF_CAPTIVEPORTAL_URI, portal_uri, sizeof(portal_uri) - 1);
+    esp_netif_dhcps_start(ap_netif);
     ESP_ERROR_CHECK(esp_netif_set_hostname(sta_netif, "bitbot"));
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
     config.nvs_enable = false;
@@ -55,7 +60,10 @@ void InitNetwork() {
     uint8_t mac[6]; ESP_ERROR_CHECK(esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP));
     char name[24]; snprintf(name, sizeof(name), "BitBot-%02X%02X", mac[4], mac[5]);
     shared.setup_ssid = name;
-    shared.setup_password = Text(shared.document, "setupPassword");
+    // Owner's choice (2026-09-19): one fixed, memorable setup password on every unit.
+    // The random per-device "setupPassword" stays in NVS unused; switch back to it
+    // before handing units to other people.
+    shared.setup_password = "BitBot2000";
     shared.state = State::Offline;
 }
 void StartStation() {

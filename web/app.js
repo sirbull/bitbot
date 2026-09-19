@@ -6,8 +6,8 @@
   const providerInfo = {
     xiaozhi: {
       requirement: 'XiaoZhi account required',
-      help: 'Create or sign in to a XiaoZhi account, then pair this device with an agent. XiaoZhi does not use an API key on this page. Open the account link after reconnecting your phone or computer to the internet.',
-      action: 'Create account or sign in to XiaoZhi ↗', actionUrl: 'https://xiaozhi.me/console/',
+      help: 'No API key needed. After you press Finish, BitBot joins your Wi-Fi and shows a 6-digit code on its screen. Then, back on your normal internet, sign in at xiaozhi.me and add a device with that code.',
+      action: '', actionUrl: '',
       fields: false,
     },
     gemini: {
@@ -42,8 +42,8 @@
     xiaozhi: {
       models: [['', 'Managed by XiaoZhi service']], voices: [['', 'Managed by XiaoZhi service']],
       requirement: 'XiaoZhi account and device pairing required',
-      serviceHelp: 'XiaoZhi offers multiple voices after pairing. Its authenticated console filters them by language and includes playable samples. Until pairing is implemented, choose and preview the voice in the XiaoZhi console.',
-      action: 'Open XiaoZhi voice settings ↗', actionUrl: 'https://xiaozhi.me/console/agents',
+      serviceHelp: 'XiaoZhi offers multiple voices after pairing. Choose and preview them in the XiaoZhi console at xiaozhi.me once BitBot shows its code and is paired.',
+      action: '', actionUrl: '',
       note: 'The selected XiaoZhi voice belongs to the paired agent. BitBot will import its name and preview when the XiaoZhi account adapter is connected.',
     },
     gemini: {
@@ -191,6 +191,9 @@
     $('#provider-help').textContent = info.help;
     setServiceLink('#provider-action', info.action, info.actionUrl);
     $('#provider-fields').hidden = !info.fields;
+    // XiaoZhi's cloud owns name, personality, language and voice; only show what BitBot itself uses.
+    $$('[data-cloud]').forEach(element => { element.hidden = provider === 'xiaozhi'; });
+    $$('[data-cloud-note]').forEach(element => { element.hidden = provider !== 'xiaozhi'; });
     if (info.fields) {
       $('#model-status').textContent = info.model;
       $('#endpoint-status').textContent = info.endpoint;

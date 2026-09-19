@@ -2,4 +2,5 @@
 nvs,data,nvs,0x9000,0x10000,
 phy_init,data,phy,0x19000,0x1000,
 factory,app,factory,0x20000,0x300000,
-# Remaining flash intentionally reserved for later audio/face assets and OTA.
+# ESP-SR speech models (English MultiNet for the wake phrases), packed by esp-sr at build time.
+model,data,spiffs,0x320000,0x4E0000,

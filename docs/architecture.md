@@ -86,6 +86,8 @@ The simulator never joins networks or invokes a paid API.
 
 - Random per-device WPA2 setup password, generated on first boot and persisted.
   Never derive a password from the MAC. Treat it as a physical setup credential.
+  **Current prototype override (2026-09-19):** the owner chose a fixed setup
+  password, `BitBot2000`, in `network.cpp`. Revert before sharing devices.
 - Local HTTP is restricted to the AP interface/subnet. No administration on the
   joined LAN. Require a per-session token header for API mutations; reject
   foreign origins and bound bodies. Do not enable CORS.

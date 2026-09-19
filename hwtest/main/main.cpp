@@ -1,0 +1,300 @@
+// BitBot hardware test: shows on the ST7789 which parts respond.
+// Pins follow docs/wiring.md. Press BOOT (after startup) to play a beep.
+#include <algorithm>
+#include <atomic>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <driver/gpio.h>
+#include <driver/i2s_std.h>
+#include <driver/spi_master.h>
+#include <esp_adc/adc_cali.h>
+#include <esp_adc/adc_cali_scheme.h>
+#include <esp_adc/adc_oneshot.h>
+#include <esp_camera.h>
+#include <esp_heap_caps.h>
+#include <esp_lcd_panel_io.h>
+#include <esp_lcd_panel_ops.h>
+#include <esp_lcd_panel_vendor.h>
+#include <esp_log.h>
+#include <esp_psram.h>
+#include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
+#include "../../firmware/main/font5x7.h"
+
+static const char* TAG = "hwtest";
+
+// Calibration knobs. Same defaults as firmware/main/Kconfig.projbuild.
+static constexpr bool kInvert = true;
+static constexpr int kYGap = 0;
+static constexpr float kDividerRatio = 2.0f;  // 100k/100k; tune against a multimeter.
+
+static constexpr int W = 240, H = 240, kRows = 16;
+static constexpr uint16_t kBg = 0x0862, kOrange = 0xfc83, kGreen = 0x07e0, kRed = 0xf800,
+                          kYellow = 0xffe0, kWhite = 0xffff, kGrey = 0x8410, kBlue = 0x001f;
+
+// ---------- Display ----------
+static esp_lcd_panel_handle_t panel;
+static SemaphoreHandle_t sent;
+static uint16_t* px;  // one DMA stripe, W * kRows
+
+static bool OnSent(esp_lcd_panel_io_handle_t, esp_lcd_panel_io_event_data_t*, void*) {
+    BaseType_t woken = pdFALSE;
+    xSemaphoreGiveFromISR(sent, &woken);
+    return woken == pdTRUE;
+}
+static void Blit(int x, int y, int w, int h) {
+    if (esp_lcd_panel_draw_bitmap(panel, x, y, x + w, y + h, px) == ESP_OK) xSemaphoreTake(sent, pdMS_TO_TICKS(1000));
+}
+static void Fill(int x, int y, int w, int h, uint16_t c) {
+    std::fill_n(px, W * kRows, c);
+    for (int top = y; top < y + h; top += kRows) Blit(x, top, w, std::min(kRows, y + h - top));
+}
+// One 16-px text line at 2x scale (20 chars), optional bar after the text.
+static void Line(int y, const char* s, uint16_t fg, int bar = 0, uint16_t barColor = kGreen) {
+    std::fill_n(px, W * kRows, kBg);
+    int n = 0;
+    for (; *s && n < 20; ++s, ++n) {
+        int c = (*s < 32 || *s > 126) ? '?' : *s;
+        for (int col = 0; col < 5; ++col)
+            for (int row = 0; row < 7; ++row)
+                if (kFont5x7[c - 32][col] >> row & 1)
+                    for (int d = 0; d < 4; ++d) px[(1 + row * 2 + d / 2) * W + n * 12 + col * 2 + d % 2] = fg;
+    }
+    for (int r = 3; r < 13 && bar > 0; ++r) std::fill_n(px + r * W + n * 12 + 4, std::min(bar, W - n * 12 - 4), barColor);
+    Blit(0, y, W, kRows);
+}
+static bool InitDisplay() {
+    spi_bus_config_t bus = {};
+    bus.sclk_io_num = GPIO_NUM_7; bus.mosi_io_num = GPIO_NUM_9;
+    bus.miso_io_num = -1; bus.quadwp_io_num = -1; bus.quadhd_io_num = -1;
+    bus.max_transfer_sz = W * kRows * sizeof(uint16_t);
+    if (spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO) != ESP_OK) return false;
+    sent = xSemaphoreCreateBinary();
+    px = static_cast<uint16_t*>(heap_caps_malloc(bus.max_transfer_sz, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+    esp_lcd_panel_io_handle_t io;
+    esp_lcd_panel_io_spi_config_t io_cfg = {};
+    io_cfg.cs_gpio_num = GPIO_NUM_4;  // 8-pin module: CS on D3
+    io_cfg.dc_gpio_num = GPIO_NUM_5;
+    io_cfg.spi_mode = 3;  // no-CS modules need CPOL=1/CPHA=1 to frame bytes
+    io_cfg.pclk_hz = 10 * 1000 * 1000;
+    io_cfg.trans_queue_depth = 1; io_cfg.lcd_cmd_bits = 8; io_cfg.lcd_param_bits = 8;
+    io_cfg.on_color_trans_done = OnSent;
+    if (esp_lcd_new_panel_io_spi(static_cast<esp_lcd_spi_bus_handle_t>(SPI2_HOST), &io_cfg, &io) != ESP_OK) return false;
+    esp_lcd_panel_dev_config_t cfg = {};
+    cfg.reset_gpio_num = GPIO_NUM_2;
+    cfg.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
+    cfg.bits_per_pixel = 16; cfg.data_endian = LCD_RGB_DATA_ENDIAN_LITTLE;
+    return esp_lcd_new_panel_st7789(io, &cfg, &panel) == ESP_OK && esp_lcd_panel_reset(panel) == ESP_OK &&
+           esp_lcd_panel_init(panel) == ESP_OK && esp_lcd_panel_set_gap(panel, 0, kYGap) == ESP_OK &&
+           esp_lcd_panel_invert_color(panel, kInvert) == ESP_OK && esp_lcd_panel_disp_on_off(panel, true) == ESP_OK;
+}
+
+// ---------- Mic (INMP441) + amp (MAX98357A) on one full-duplex I2S ----------
+static constexpr int kRate = 16000, kFrames = 256;
+static i2s_chan_handle_t tx, rx;
+static std::atomic<int> micDb{-120}, micSlot{0};
+static std::atomic<bool> micAlive{false}, beep{false}, beeping{false};
+
+static bool InitAudio() {
+    i2s_chan_config_t chan = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    chan.auto_clear = true;  // silence when we are not writing
+    if (i2s_new_channel(&chan, &tx, &rx) != ESP_OK) return false;
+    i2s_std_config_t std = {
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(kRate),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO),
+        .gpio_cfg = {.mclk = GPIO_NUM_NC, .bclk = GPIO_NUM_43, .ws = GPIO_NUM_44, .dout = GPIO_NUM_1, .din = GPIO_NUM_8,
+                     .invert_flags = {}},
+    };
+    return i2s_channel_init_std_mode(tx, &std) == ESP_OK && i2s_channel_init_std_mode(rx, &std) == ESP_OK &&
+           i2s_channel_enable(tx) == ESP_OK && i2s_channel_enable(rx) == ESP_OK;
+}
+static void AudioTask(void*) {
+    static int32_t in[kFrames * 2], out[kFrames * 2];
+    int toneLeft = 0;
+    float phase = 0;
+    for (;;) {
+        size_t got = 0;
+        if (i2s_channel_read(rx, in, sizeof(in), &got, pdMS_TO_TICKS(500)) != ESP_OK || got == 0) { micAlive = false; continue; }
+        // L/R to GND puts the mic in the left slot; check both in case it is tied high.
+        // An undriven SD line reads stuck 0 / -1, with the odd glitch bit.
+        int frames = got / 8, stuck[2] = {};
+        int32_t peaks[2] = {};
+        for (int i = 0; i < frames * 2; ++i) {
+            stuck[i % 2] += (in[i] >> 8) == 0 || (in[i] >> 8) == -1;
+            peaks[i % 2] = std::max(peaks[i % 2], std::abs(in[i] >> 8));  // 24-bit, left-aligned
+        }
+        int slot = stuck[1] < stuck[0];
+        micAlive = stuck[slot] < frames / 8;  // a live mic is almost never exactly 0 / -1
+        micSlot = slot;
+        int32_t peak = peaks[slot];
+        micDb = peak > 0 ? static_cast<int>(20 * log10f(peak / 8388608.0f)) : -120;
+
+        if (beep.exchange(false)) toneLeft = kRate / 2;  // 0.5 s
+        beeping = toneLeft > 0;
+        if (toneLeft > 0) {
+            for (int i = 0; i < kFrames; ++i) {
+                float f = toneLeft > kRate / 4 ? 660 : 880;  // two-tone pip
+                phase = fmodf(phase + 2 * float(M_PI) * f / kRate, 2 * float(M_PI));
+                int32_t v = static_cast<int32_t>(sinf(phase) * 0.1f * INT32_MAX);  // ~-20 dBFS, gentle
+                out[i * 2] = out[i * 2 + 1] = v;
+            }
+            toneLeft -= kFrames;
+            size_t written;
+            i2s_channel_write(tx, out, sizeof(out), &written, pdMS_TO_TICKS(100));
+        }
+    }
+}
+
+// ---------- Battery divider on GPIO6 / ADC1 ch5 ----------
+static adc_oneshot_unit_handle_t adc;
+static adc_cali_handle_t cali;
+static bool InitBattery() {
+    adc_oneshot_unit_init_cfg_t unit = {.unit_id = ADC_UNIT_1, .clk_src = {}, .ulp_mode = ADC_ULP_MODE_DISABLE};
+    adc_oneshot_chan_cfg_t ch = {.atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_DEFAULT};
+    adc_cali_curve_fitting_config_t cc = {.unit_id = ADC_UNIT_1, .chan = ADC_CHANNEL_5, .atten = ADC_ATTEN_DB_12,
+                                          .bitwidth = ADC_BITWIDTH_DEFAULT};
+    return adc_oneshot_new_unit(&unit, &adc) == ESP_OK && adc_oneshot_config_channel(adc, ADC_CHANNEL_5, &ch) == ESP_OK &&
+           adc_cali_create_scheme_curve_fitting(&cc, &cali) == ESP_OK;
+}
+// Returns volts; spread = max-min over the burst. A floating pin (divider not
+// wired) wanders by volts, a real divider with its 100 nF cap stays within ~50 mV.
+static float BatteryVolts(float& spread) {
+    int sum = 0, lo = 99999, hi = 0;
+    for (int i = 0; i < 16; ++i) {
+        int raw = 0, mv = 0;
+        adc_oneshot_read(adc, ADC_CHANNEL_5, &raw);
+        adc_cali_raw_to_voltage(cali, raw, &mv);
+        sum += mv; lo = std::min(lo, mv); hi = std::max(hi, mv);
+        vTaskDelay(1);
+    }
+    spread = (hi - lo) / 1000.0f * kDividerRatio;
+    return sum / 16 / 1000.0f * kDividerRatio;
+}
+
+// ---------- Camera (XIAO Sense connector) ----------
+static const char* InitCamera() {
+    camera_config_t c = {};
+    c.pin_pwdn = -1; c.pin_reset = -1; c.pin_xclk = 10;
+    c.pin_sccb_sda = 40; c.pin_sccb_scl = 39;
+    c.pin_d7 = 48; c.pin_d6 = 11; c.pin_d5 = 12; c.pin_d4 = 14;
+    c.pin_d3 = 16; c.pin_d2 = 18; c.pin_d1 = 17; c.pin_d0 = 15;
+    c.pin_vsync = 38; c.pin_href = 47; c.pin_pclk = 13;
+    c.xclk_freq_hz = 20000000;
+    c.ledc_timer = LEDC_TIMER_0; c.ledc_channel = LEDC_CHANNEL_0;
+    c.pixel_format = PIXFORMAT_RGB565; c.frame_size = FRAMESIZE_QQVGA;  // 160x120
+    c.fb_count = 2; c.fb_location = CAMERA_FB_IN_PSRAM; c.grab_mode = CAMERA_GRAB_LATEST;
+    if (esp_camera_init(&c) != ESP_OK) return nullptr;
+    sensor_t* s = esp_camera_sensor_get();
+    camera_sensor_info_t* info = s ? esp_camera_sensor_get_info(&s->id) : nullptr;
+    return info ? info->name : "UNKNOWN";
+}
+static bool DrawCameraFrame() {
+    camera_fb_t* fb = esp_camera_fb_get();
+    if (!fb) return false;
+    if (fb->format == PIXFORMAT_RGB565 && fb->width <= W) {
+        int x = (W - fb->width) / 2, maxRows = std::min<int>(fb->height, 120);
+        for (int top = 0; top < maxRows; top += kRows) {
+            int rows = std::min(kRows, maxRows - top);
+            const uint8_t* src = fb->buf + top * fb->width * 2;
+            for (int i = 0; i < rows * static_cast<int>(fb->width); ++i) px[i] = src[i * 2] << 8 | src[i * 2 + 1];  // camera is big-endian
+            Blit(x, 120 + top, fb->width, rows);
+        }
+    }
+    esp_camera_fb_return(fb);
+    return true;
+}
+
+extern "C" void app_main() {
+    gpio_config_t boot = {.pin_bit_mask = 1ULL << GPIO_NUM_0, .mode = GPIO_MODE_INPUT, .pull_up_en = GPIO_PULLUP_ENABLE,
+                          .pull_down_en = GPIO_PULLDOWN_DISABLE, .intr_type = GPIO_INTR_DISABLE};
+    gpio_config(&boot);
+
+    // Wiring probe: a pin that stays high with the internal pull-down has an external
+    // pull-up (module RES/BLK) or a supply on it; one that stays low with pull-up is grounded.
+    for (int pin : {1, 2, 4, 5, 6, 7, 8, 9, 43, 44}) {
+        gpio_num_t g = static_cast<gpio_num_t>(pin);
+        gpio_set_direction(g, GPIO_MODE_INPUT);
+        gpio_set_pull_mode(g, GPIO_PULLDOWN_ONLY); vTaskDelay(2); int down = gpio_get_level(g);
+        gpio_set_pull_mode(g, GPIO_PULLUP_ONLY); vTaskDelay(2); int up = gpio_get_level(g);
+        gpio_set_pull_mode(g, GPIO_FLOATING);
+        ESP_LOGI(TAG, "pin GPIO%-2d %s", pin, down ? "drives HIGH" : !up ? "tied LOW" : "open/high-Z");
+    }
+    bool display = InitDisplay();
+    ESP_LOGI(TAG, "display %s", display ? "OK" : "FAIL");
+    if (display) {
+        Fill(0, 0, W, H, kBg);
+        Line(0, "BITBOT HW-TEST", kOrange);
+        Line(120, "Starting camera...", kGrey);
+    }
+    bool audio = InitAudio();
+    ESP_LOGI(TAG, "i2s %s", audio ? "OK" : "FAIL");
+    if (audio) { xTaskCreate(AudioTask, "audio", 4096, nullptr, 5, nullptr); beep = true; }  // startup pip
+    bool battery = InitBattery();
+    const char* camera = InitCamera();
+    ESP_LOGI(TAG, "camera %s", camera ? camera : "not found");
+
+    if (display) {
+        Fill(0, 120, W, 20, kBg);
+        if (!camera) {
+            // Color-order check: these must read red, green, blue.
+            Fill(30, 150, 50, 50, kRed); Fill(95, 150, 50, 50, kGreen); Fill(160, 150, 50, 50, kBlue);
+            Line(210, "  R      G      B", kWhite);
+        }
+    }
+
+    char buf[32], last[6][32] = {};
+    int frames = 0;
+    int64_t fpsStart = esp_timer_get_time();
+    float fps = 0;
+    bool wasPressed = false;
+    for (int tick = 0;; ++tick) {
+        bool pressed = gpio_get_level(GPIO_NUM_0) == 0;
+        if (pressed && !wasPressed) beep = true;
+        wasPressed = pressed;
+
+        if (camera && display && DrawCameraFrame()) ++frames;
+        int64_t now = esp_timer_get_time();
+        if (now - fpsStart > 1000000) { fps = frames * 1e6f / (now - fpsStart); frames = 0; fpsStart = now; }
+
+        if (!display) { vTaskDelay(pdMS_TO_TICKS(100)); continue; }
+        if (!camera) vTaskDelay(pdMS_TO_TICKS(50));
+
+        auto row = [&](int i, uint16_t color, int bar = 0) {
+            if (strcmp(buf, last[i]) == 0 && bar == 0) return;  // unchanged text, no live bar
+            strcpy(last[i], buf);
+            Line(20 + i * 20, buf, color, bar);
+        };
+        size_t psram = esp_psram_get_size();
+        snprintf(buf, sizeof(buf), "CPU OK PSRAM %uMB", static_cast<unsigned>(psram >> 20));
+        row(0, psram ? kGreen : kRed);
+
+        if (!audio) { snprintf(buf, sizeof(buf), "MIC I2S FAIL"); row(1, kRed); }
+        else if (!micAlive) { snprintf(buf, sizeof(buf), "MIC NO SIGNAL"); row(1, kRed); }
+        else if (tick % 2 == 0) {  // live meter, ~10 Hz
+            int db = micDb;
+            snprintf(buf, sizeof(buf), "MIC%s %4ddB", micSlot ? " R" : "", db);
+            row(1, kGreen, std::clamp((db + 90) * 2, 1, 120));  // -90..-30 dBFS
+        }
+
+        snprintf(buf, sizeof(buf), "%s", audio ? (beeping ? "SPEAKER: BEEP!" : "SPEAKER BOOT=BEEP") : "SPEAKER I2S FAIL");
+        row(2, !audio ? kRed : beeping ? kYellow : kWhite);
+
+        if (tick % 10 == 0) {
+            float spread = 0, v = battery ? BatteryVolts(spread) : 0;
+            bool floating = spread > 0.3f;
+            bool ok = battery && !floating && v > 3.0f && v < 4.35f;
+            if (!battery) snprintf(buf, sizeof(buf), "BATT ADC FAIL");
+            else if (floating) snprintf(buf, sizeof(buf), "BATT FLOATING %.1fV", v);
+            else snprintf(buf, sizeof(buf), ok ? "BATT %.2fV" : "BATT %.2fV ?", v);
+            row(3, ok ? kGreen : kRed);
+            ESP_LOGI(TAG, "batt %.2fV spread %.2f mic %s (%s) %ddB fps %.1f", v, spread, micAlive ? "ok" : "none", micSlot ? "R" : "L", micDb.load(), fps);
+        }
+
+        if (camera) snprintf(buf, sizeof(buf), "CAMERA %s %.0ffps", camera, fps);
+        else snprintf(buf, sizeof(buf), "CAMERA NOT FOUND");
+        row(4, camera ? kGreen : kRed);
+    }
+}

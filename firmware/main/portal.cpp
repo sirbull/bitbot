@@ -27,11 +27,20 @@ static std::string Header(httpd_req_t* req, const char* name) {
     if (httpd_req_get_hdr_value_str(req, name, output.data(), output.size()) != ESP_OK) return "";
     output.resize(length); return output;
 }
+// httpd listens on a dual-stack IPv6 socket, so IPv4 clients arrive as ::ffff:a.b.c.d.
+// Returns the IPv4 address in host order, or 0 for anything else (real IPv6 included).
+static uint32_t Ipv4(const sockaddr_storage& address) {
+    if (address.ss_family == AF_INET) return ntohl(reinterpret_cast<const sockaddr_in&>(address).sin_addr.s_addr);
+    if (address.ss_family != AF_INET6) return 0;
+    const auto& words = reinterpret_cast<const sockaddr_in6&>(address).sin6_addr.un.u32_addr;
+    return words[0] == 0 && words[1] == 0 && words[2] == htonl(0xffff) ? ntohl(words[3]) : 0;
+}
 static bool LocalAccess(httpd_req_t* req) {
-    sockaddr_in local = {}, peer = {}; socklen_t length = sizeof(local);
+    sockaddr_storage local = {}, peer = {};
+    socklen_t local_length = sizeof(local), peer_length = sizeof(peer);
     int fd = httpd_req_to_sockfd(req);
-    if (getsockname(fd, reinterpret_cast<sockaddr*>(&local), &length) != 0 || getpeername(fd, reinterpret_cast<sockaddr*>(&peer), &length) != 0) return false;
-    return local.sin_addr.s_addr == inet_addr("192.168.4.1") && (ntohl(peer.sin_addr.s_addr) & 0xffffff00U) == 0xc0a80400U;
+    if (getsockname(fd, reinterpret_cast<sockaddr*>(&local), &local_length) != 0 || getpeername(fd, reinterpret_cast<sockaddr*>(&peer), &peer_length) != 0) return false;
+    return Ipv4(local) == 0xc0a80401U && (Ipv4(peer) & 0xffffff00U) == 0xc0a80400U;  // 192.168.4.1 / 192.168.4.0/24
 }
 static bool DuplicateFields(const cJSON* value) {
     if (!value) return false;
@@ -78,7 +87,13 @@ static esp_err_t Get(httpd_req_t* req, const std::string& uri) {
     }
     if (uri == "/api/scan") {
         if (shared.job == "testing") return Error(req, "Wait for the connection test to finish.", "409 Conflict");
-        if (esp_wifi_scan_start(nullptr, true) != ESP_OK) return Error(req, "Wi-Fi scan is busy. Try again.", "503 Service Unavailable");
+        // Scanning needs the station interface; setup starts as AP-only.
+        wifi_mode_t mode;
+        if (esp_wifi_get_mode(&mode) == ESP_OK && mode == WIFI_MODE_AP) esp_wifi_set_mode(WIFI_MODE_APSTA);
+        if (esp_err_t err = esp_wifi_scan_start(nullptr, true); err != ESP_OK) {
+            ESP_LOGW("bitbot_portal", "Scan failed: %s", esp_err_to_name(err));
+            return Error(req, "Wi-Fi scan is busy. Try again.", "503 Service Unavailable");
+        }
         uint16_t count = 24;
         std::vector<wifi_ap_record_t> records(count);
         if (esp_wifi_scan_get_ap_records(&count, records.data()) != ESP_OK) return Error(req, "Scan failed.", "503 Service Unavailable");

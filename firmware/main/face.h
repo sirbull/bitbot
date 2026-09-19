@@ -1,0 +1,18 @@
+#pragma once
+#include <cstdint>
+// Face drawing: pure maths, no ESP-IDF, so tools/face_preview.cpp renders the very same pixels to PNG.
+namespace bitbot {
+enum class Expression { Neutral, Happy, Surprised, Scared, Angry, Cute, Love, PutOff, Laughing, Winking, Exasperated, Sceptical };
+constexpr int kExpressions = static_cast<int>(Expression::Sceptical) + 1;
+constexpr uint16_t kBackground = 0x0862;
+constexpr int kScreenW = 240, kFaceBottom = 168;  // rows from kFaceBottom down are for text
+// The face is a sprite drawn at (kFaceX + x, kFaceY + y), -kLookX <= x <= kLookX, -kLookUp <= y <= 0:
+// it looks sideways and up, never down into the text. It moves at most kPadX/kPadY px per frame and
+// keeps a background border that wide, which wipes the previous position.
+constexpr int kLookX = 38, kLookUp = 14, kPadX = 10, kPadY = 4;
+constexpr int kFaceX = kLookX, kFaceW = kScreenW - 2 * kLookX, kFaceY = kLookUp, kFaceH = kFaceBottom - kLookUp;
+// Neutral blinks through these poses; the other expressions have one pose.
+enum Pose { kOpen, kHalf, kThin, kClosed, kPoses };
+// Renders into out, kFaceW * kFaceH RGB565 pixels. pose only matters for Neutral.
+void RenderFace(Expression expression, Pose pose, uint16_t* out);
+}

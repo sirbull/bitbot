@@ -22,8 +22,11 @@ test('portable setup, persistence, safe text rendering, and responsive layout', 
   await expect(page.getByRole('button', { name: /Home network/ })).toBeVisible();
   await expect(page.locator('[name="provider"][value="xiaozhi"]')).toBeChecked();
   await expect(page.locator('#provider-requirement')).toHaveText('XiaoZhi account required');
-  await expect(page.locator('#provider-action')).toHaveAttribute('href', 'https://xiaozhi.me/console/');
+  await expect(page.locator('#provider-action')).toBeHidden();
+  await expect(page.locator('#provider-help')).toContainText('6-digit code');
   await expect(page.locator('#provider-fields')).toBeHidden();
+  await expect(page.locator('[name="personality"]')).toBeHidden();
+  await expect(page.locator('[data-cloud-note]').first()).toBeVisible();
   await expect(page.locator('[data-panel="connection"]')).toBeVisible();
   await expect(page.locator('[data-panel="personality"]')).toBeVisible();
   await expect(page.locator('[data-panel="voice"]')).toBeVisible();
@@ -36,7 +39,7 @@ test('portable setup, persistence, safe text rendering, and responsive layout', 
   await expect(page.locator('[name="voice"]')).toHaveValue('');
   await expect(page.locator('[name="speechProvider"]')).toHaveValue('same');
   await expect(page.locator('#speech-requirement')).toContainText('pairing required');
-  await expect(page.locator('#speech-action')).toHaveAttribute('href', 'https://xiaozhi.me/console/agents');
+  await expect(page.locator('#speech-action')).toBeHidden();
   await expect(page.locator('#voice-help')).toContainText('paired agent');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: `test-results/${info.project.name}-setup.png`, fullPage: true });
@@ -51,9 +54,9 @@ test('portable setup, persistence, safe text rendering, and responsive layout', 
   expect(await page.locator('#saved-networks b').count()).toBe(0);
 
   await page.getByRole('button', { name: /Mind & personality/ }).click();
+  await page.locator('[name="provider"][value="gemini"]').check();
   await page.locator('[name="name"]').fill('Blåbær');
   await page.locator('[name="personality"]').fill('Svar på norsk og engelsk. Vær nysgjerrig: æ ø å Æ Ø Å.');
-  await page.locator('[name="provider"][value="gemini"]').check();
   await expect(page.locator('#provider-fields')).toBeVisible();
   await expect(page.locator('#key-status')).toHaveText('Required to use');
   await expect(page.locator('[name="voiceModel"]')).toHaveValue('gemini-3.1-flash-tts-preview');
@@ -107,8 +110,8 @@ test('voice catalogue follows the provider and speech model, with an honest loca
     } });
   });
   await page.goto('/');
+  await page.locator('[name="provider"][value="gemini"]').check();
   await page.locator('[name="speechProvider"]').selectOption('openai');
-  await expect(page.locator('[name="provider"][value="xiaozhi"]')).toBeChecked();
   await expect(page.locator('#speech-fields')).toBeVisible();
   await expect(page.locator('#speech-key-status')).toHaveText('Required to use');
   await expect(page.locator('#speech-action')).toHaveAttribute('href', 'https://platform.openai.com/api-keys');
@@ -143,6 +146,7 @@ test('failed connection and validation errors keep settings editable', async ({ 
   await expect(page.locator('#connection-result')).toContainText('Could not connect', { timeout: 12000 });
   await expect(page.locator('#connect')).toBeEnabled();
   await page.getByRole('button', { name: /Mind & personality/ }).click();
+  await page.locator('[name="provider"][value="gemini"]').check();
   await page.locator('[name="name"]').fill('å'.repeat(25));
   await page.getByRole('button', { name: /Save preferences/ }).click();
   await expect(page.locator('#notice')).toContainText('too long');

@@ -1,7 +1,7 @@
 # BitBot
 
 A small portable AI companion for the **Seeed XIAO ESP32-S3 Sense**, with a
-**7-pin ST7789 240×240** display, camera, microphone, and speaker. Norwegian
+**8-pin ST7789 240×240** display, camera, microphone, and speaker. Norwegian
 and English are the default pair, with an international BCP-47 language
 preference and an independent speech service with provider-aware model/voice
 dropdowns. The desktop
@@ -9,8 +9,7 @@ simulator includes a clearly labelled local browser voice preview.
 
 **Current milestone: commissioning and hardware bring-up.** The English setup
 portal, Wi-Fi profiles, settings storage, and optional ST7789 test renderer
-are implemented. Voice conversation, wake word, camera, battery measurement,
-and real power optimization are still to come. No paid AI calls are made.
+are implemented. Voice conversation, wake word, camera, and real power optimization are still to come. No paid AI calls are made.
 
 ## Continue development at home
 
@@ -62,6 +61,7 @@ idf.py -p COM5 flash monitor
 ```
 
 Replace `COM5` with the board's serial port (for example `/dev/ttyACM0` on Linux).
+On a Mac without ESP-IDF, flash the CI build instead: see [docs/flashing.md](docs/flashing.md).
 Only flash the actual XIAO ESP32-S3 Sense. Do not use `erase-flash` for ordinary
 updates: it removes saved settings. This commissioning partition layout is new;
 flashing over another project's firmware can require a deliberate migration.
@@ -85,31 +85,26 @@ supported. A 2.4 GHz phone hotspot is useful for portable demos.
 
 ## The confirmed display
 
-Owner-confirmed pins, left to right with the pins at the top:
+Verified on hardware 2026-09-19 (8-pin module):
 
 | Display | XIAO signal allocation |
 | --- | --- |
 | GND | GND |
-| VCC | Verify module supply requirements before connection |
-| SCK | D8 / GPIO7 |
+| VCC | 3V3 |
+| SCL (SPI clock) | D8 / GPIO7 |
 | SDA (SPI MOSI) | D10 / GPIO9 |
-| RES | D1 / GPIO2 |
+| RST | D1 / GPIO2 |
 | DC | D4 / GPIO5 |
-| BLK | Verify backlight circuit/current; not driven directly by firmware |
+| CS | D3 / GPIO4 |
+| BL | 3V3 (backlight always on; not GPIO-driven) |
 
-There is **no CS pin**. The included driver uses ESP-IDF's `esp_lcd` ST7789
-driver with CS disabled, RGB565, and conservative 10 MHz SPI. Do not insert or
-initialize an SD card on the shared Sense SPI wiring. GPIO6 is left available
-for future battery ADC use. See [hardware review](docs/hardware.md).
+The driver uses ESP-IDF's `esp_lcd` ST7789 driver, SPI mode 3, RGB565, and
+conservative 10 MHz SPI. Do not insert or
+initialize an SD card on the shared Sense SPI wiring. GPIO6 is unused; there is
+no battery sensing. See [hardware review](docs/hardware.md).
 
-After verifying and connecting the display power/backlight correctly:
-
-```sh
-idf.py menuconfig
-```
-
-Enable **BitBot hardware bring-up → Enable verified 7-pin ST7789 240x240 display
-wiring**. The default build leaves external pins inactive. The test shows
+The display is enabled by default (**BitBot hardware bring-up → Enable verified
+8-pin ST7789 240x240 display wiring** in `idf.py menuconfig`). The test shows
 blinking eyes, a status stripe, and red/green/blue test bars. Color inversion,
 RGB/BGR order, and row offset are configurable. Physical panel validation is
 still required. Setup text, UTF-8 captions, and backlight dimming are not yet
