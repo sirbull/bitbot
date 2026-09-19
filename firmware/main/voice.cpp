@@ -9,6 +9,9 @@
 #include <cstring>
 #include <esp_crt_bundle.h>
 #include <esp_log.h>
+#include <esp_afe_config.h>
+#include <esp_afe_sr_iface.h>
+#include <esp_afe_sr_models.h>
 #include <esp_mn_iface.h>
 #include <esp_mn_models.h>
 #include <esp_mn_speech_commands.h>
@@ -38,7 +41,8 @@ static const struct { const char* text; const char* phonemes; } kWakePhrases[] =
     {"hey botbot", "hd BnT BnT"},
     {"hei botbot", "hi BnTBnT"},
 };
-static constexpr float kWakeThreshold = 0.1f;  // short phrases score low; esp-sr's own example hit 0.21
+static constexpr float kWakeThreshold = 0.1f;  // short phrases score low; esp-sr's example hit 0.21
+
 
 enum class Voice { Off, Idle, Connecting, Listening, Speaking };
 static std::atomic<Voice> voice{Voice::Off};
@@ -261,8 +265,23 @@ static void VoiceTask(void*) {
     }
 }
 
-// Mic: wake phrase detection while idle, Opus upload while listening.
+// The microphone path runs through esp-sr's AFE (noise suppression + automatic gain), the same
+// front end XiaoZhi uses. Raw mic audio is too quiet and too noisy for the wake phrase recogniser.
+static const esp_afe_sr_iface_t* afe = nullptr;
+static esp_afe_sr_data_t* afe_data = nullptr;
+
+// Reads I2S and feeds AFE, in chunks of exactly the size AFE asks for.
 static void MicTask(void*) {
+    const int chunk = afe->get_feed_chunksize(afe_data);
+    std::vector<int16_t> block(chunk);
+    for (;;) {
+        if (!ReadMic(block.data(), block.size())) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
+        for (int16_t sample : block) mic_peak = std::max<int>(mic_peak, std::abs(sample));
+        afe->feed(afe_data, block.data());
+    }
+}
+// Takes the cleaned audio: wake phrase while idle or speaking, Opus uplink while listening.
+static void ListenTask(void*) {
     esp_mn_iface_t* multinet = nullptr;
     model_iface_data_t* model = nullptr;
     if (srmodel_list_t* models = esp_srmodel_init("model")) {
@@ -280,7 +299,7 @@ static void MicTask(void*) {
         }
     }
     if (!model) ESP_LOGW(kTag, "No English MultiNet in the model partition: wake phrases off, use the button");
-    const int chunk = model ? multinet->get_samp_chunksize(model) : 512;
+    const int mn_chunk = model ? multinet->get_samp_chunksize(model) : 512;
 
     esp_opus_enc_config_t enc_config = ESP_OPUS_ENC_CONFIG_DEFAULT();
     enc_config.sample_rate = kAudioRate; enc_config.channel = 1;
@@ -292,42 +311,32 @@ static void MicTask(void*) {
     esp_opus_enc_get_frame_size(encoder, &in_size, &out_size);
     std::vector<uint8_t> opus(std::max(out_size, 512));
 
-    std::vector<int16_t> block(320), wake_buffer, frame;
-    wake_buffer.reserve(chunk * 2); frame.reserve(kFrameSamples);
+    std::vector<int16_t> wake_buffer, frame;
+    wake_buffer.reserve(mn_chunk * 2); frame.reserve(kFrameSamples);
     Voice previous = Voice::Off;
     for (;;) {
-        if (!ReadMic(block.data(), block.size())) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
+        afe_fetch_result_t* result = afe->fetch(afe_data);
+        if (!result || result->ret_value != ESP_OK) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
+        const int16_t* clean = result->data;
+        const int samples = result->data_size / 2;
         const Voice now = voice.load();
-        for (int16_t s : block) mic_peak = std::max<int>(mic_peak, std::abs(s));
         if (now != previous) { wake_buffer.clear(); frame.clear(); if (model) multinet->clean(model); previous = now; }
         if ((now == Voice::Idle || now == Voice::Speaking) && model) {
-            wake_buffer.insert(wake_buffer.end(), block.begin(), block.end());
-            while (static_cast<int>(wake_buffer.size()) >= chunk) {
-                esp_mn_state_t mn = multinet->detect(model, wake_buffer.data());
-                static int64_t mn_log_at = 0;
-                if (NowMs() >= mn_log_at) {
-                    mn_log_at = NowMs() + 2000;
-                    int peak = 0;
-                    for (int i = 0; i < chunk; ++i) peak = std::max<int>(peak, std::abs(wake_buffer[i]));
-                    ESP_LOGI(kTag, "wake: mn state %d, chunk %d, peak %d dBFS", static_cast<int>(mn), chunk,
-                             peak ? static_cast<int>(20 * log10f(peak / 32768.0f)) : -99);
-                }
-                if (mn == ESP_MN_STATE_TIMEOUT) {
-                    const auto* r = multinet->get_results(model);
-                    ESP_LOGI(kTag, "wake: timeout, heard \"%s\"", r ? r->raw_string : "");
-                    multinet->clean(model);
-                }
-                if (mn == ESP_MN_STATE_DETECTED) {
-                    const auto* result = multinet->get_results(model);
-                    ESP_LOGI(kTag, "Wake phrase \"%s\" (p=%.2f)", result->string, result->num ? result->prob[0] : 0.0f);
+            wake_buffer.insert(wake_buffer.end(), clean, clean + samples);
+            while (static_cast<int>(wake_buffer.size()) >= mn_chunk) {
+                esp_mn_state_t state = multinet->detect(model, wake_buffer.data());
+                if (state == ESP_MN_STATE_DETECTED) {
+                    const auto* detection = multinet->get_results(model);
+                    ESP_LOGI(kTag, "Wake phrase \"%s\" (p=%.2f)", detection->string, detection->num ? detection->prob[0] : 0.0f);
                     wake_heard = true;
-                    multinet->clean(model);
                 }
-                wake_buffer.erase(wake_buffer.begin(), wake_buffer.begin() + chunk);
+                // MultiNet stops listening after its 3 s window unless it is reset.
+                if (state != ESP_MN_STATE_DETECTING) multinet->clean(model);
+                wake_buffer.erase(wake_buffer.begin(), wake_buffer.begin() + mn_chunk);
             }
         } else if (now == Voice::Listening && encoder) {
-            frame.insert(frame.end(), block.begin(), block.end());
-            if (static_cast<int>(frame.size()) >= kFrameSamples) {
+            frame.insert(frame.end(), clean, clean + samples);
+            while (static_cast<int>(frame.size()) >= kFrameSamples) {
                 esp_audio_enc_in_frame_t in = {reinterpret_cast<uint8_t*>(frame.data()), static_cast<uint32_t>(kFrameSamples * 2)};
                 esp_audio_enc_out_frame_t out = {opus.data(), static_cast<uint32_t>(opus.size()), 0, 0};
                 if (esp_opus_enc_process(encoder, &in, &out) == ESP_AUDIO_ERR_OK && out.encoded_bytes > 0) {
@@ -371,7 +380,18 @@ void StartVoice() {
     playback = xQueueCreate(64, sizeof(Packet));
     SetVolume(ReadPrefs().volume);
     // Opus encoding and MultiNet need deep stacks. Audio work stays on core 1, away from Wi-Fi on core 0.
-    xTaskCreatePinnedToCore(MicTask, "mic", 32 * 1024, nullptr, 6, nullptr, 1);
+    srmodel_list_t* models = esp_srmodel_init("model");
+    afe_config_t* afe_config = afe_config_init("M", models, AFE_TYPE_SR, AFE_MODE_LOW_COST);
+    afe_config->wakenet_init = false;  // the wake phrase is MultiNet's job, not WakeNet's
+    afe_config->aec_init = false;      // no echo canceller: one mic, no reference channel
+    afe_config->vad_init = false;      // the server decides when the sentence ends
+    afe_config->ns_init = true; afe_config->agc_init = true;
+    afe = esp_afe_handle_from_config(afe_config);
+    afe_data = afe->create_from_config(afe_config);
+    afe_config_free(afe_config);
+    if (!afe_data) { ESP_LOGE(kTag, "AFE failed: voice disabled"); return; }
+    xTaskCreatePinnedToCore(MicTask, "mic", 8 * 1024, nullptr, 6, nullptr, 1);
+    xTaskCreatePinnedToCore(ListenTask, "listen", 40 * 1024, nullptr, 6, nullptr, 1);
     xTaskCreatePinnedToCore(SpeakerTask, "speaker", 24 * 1024, nullptr, 7, nullptr, 1);
     xTaskCreate(VoiceTask, "voice", 6144, nullptr, 5, nullptr);
 }
