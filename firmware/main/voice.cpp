@@ -1,6 +1,7 @@
 #include "voice.h"
 #include "audio.h"
 #include "bitbot.h"
+#include "camera.h"
 #include "display.h"
 #include "xiaozhi.h"
 #include <algorithm>
@@ -9,9 +10,6 @@
 #include <cstring>
 #include <esp_crt_bundle.h>
 #include <esp_log.h>
-#include <esp_afe_config.h>
-#include <esp_afe_sr_iface.h>
-#include <esp_afe_sr_models.h>
 #include <esp_mn_iface.h>
 #include <esp_mn_models.h>
 #include <esp_mn_speech_commands.h>
@@ -23,6 +21,7 @@
 #include <freertos/queue.h>
 #include <freertos/task.h>
 #include <model_path.h>
+#include <memory>
 #include <mutex>
 #include <vector>
 
@@ -30,30 +29,37 @@
 namespace bitbot {
 static constexpr const char* kTag = "bitbot_voice";
 static constexpr int kFrameMs = 60, kFrameSamples = kAudioRate * kFrameMs / 1000;  // Opus frame, both ways
-// Wake phrases for the English MultiNet (mn7_en), which matches phonemes, not spelling: esp-sr's own
-// alphabet, read off its model/multinet_model/fst/commands_en.txt (HIGHEST = "hicST", so HH = h,
-// AY = i, B = B, IH = g, AA = n, EY = d, T = T). "hei botbot" is the Norwegian one, said in English.
-// ponytail: tune these and kWakeThreshold against the real mic; a higher threshold is stricter.
+// Wake phrases for the English MultiNet (mn7_en), given as esp-sr phonemes (its own alphabet, see
+// model/multinet_model/fst/commands_en.txt and tool/multinet_g2p.py).
+//
+// Measured on this board by feeding recorded clips straight into the recogniser: it only matches
+// phrases built from real English words. "hey robot" (p=0.33) and "hey bit robot" (p=0.26) are
+// recognised; "hey bitbot", "hey bit bot" and even "hey bot" never are, however clearly spoken.
+// A true "hey bitbot" needs a WakeNet model trained on that phrase; see docs/next-steps.md.
+// ponytail: the button always works, so treat these as a convenience, not the only way in.
 static const struct { const char* text; const char* phonemes; } kWakePhrases[] = {
-    {"hey bitbot", "hd BgT BnT"},   // HH EY  B IH T  B AA T
-    {"hey bitbot", "hd BgTBnT"},    // said as one word
-    {"hi bitbot", "hi BgT BnT"},    // HH AY ... (also Norwegian "hei")
-    {"hey botbot", "hd BnT BnT"},
-    {"hei botbot", "hi BnTBnT"},
+    {"hey bit robot", "hd BgT RbBnT"},  // closest to "BitBot" that the model can hear
+    {"hey robot", "hd RbBnT"},
+    {"okay robot", "bKd RbBnT"},
+    {"hi robot", "hi RbBnT"},
 };
-static constexpr float kWakeThreshold = 0.1f;  // short phrases score low; esp-sr's example hit 0.21
-
+// esp_websocket_client aborts the whole connection when a write times out, so this is the longest
+// Wi-Fi stall a conversation survives, not a per-frame deadline. Blocking here drops some mic DMA;
+// losing a little audio beats losing the call.
+static constexpr int kSendTimeoutMs = 3000;
+static constexpr float kWakeThreshold = 0.2f;  // ponytail: esp-sr default; lower made detection worse, not better
 
 enum class Voice { Off, Idle, Connecting, Listening, Speaking };
 static std::atomic<Voice> voice{Voice::Off};
 static std::atomic<bool> wake_heard{false}, button_pressed{false}, tts_done{false};
 static std::atomic<int> pending_audio{0};
 static std::atomic<int64_t> last_activity{0};
-static std::atomic<int> sent_frames{0}, received_frames{0}, mic_peak{0}, played_samples{0}, decode_errors{0};  // for the once-a-second log line
+static std::atomic<int> sent_frames{0}, received_frames{0}, mic_peak{0}, played_samples{0}, decode_errors{0}, underruns{0};  // for the once-a-second log line
 
 static std::mutex ws_mutex;  // guards ws and session_id between the voice, mic and WebSocket tasks
 static esp_websocket_client_handle_t ws = nullptr;
 static std::string session_id;
+static std::string vision_url, vision_token;  // from the MCP handshake; token is a secret
 static EventGroupHandle_t ws_events;
 static constexpr EventBits_t kWsConnected = 1, kWsHello = 2, kWsClosed = 4;
 struct Packet { uint8_t* data; size_t size; };
@@ -92,7 +98,7 @@ static void Caption(const std::string& text, bool is_caption = true) {
 
 static bool SendText(const std::string& text) {
     std::lock_guard<std::mutex> lock(ws_mutex);
-    return ws && esp_websocket_client_send_text(ws, text.data(), text.size(), pdMS_TO_TICKS(1000)) >= 0;
+    return ws && esp_websocket_client_send_text(ws, text.data(), text.size(), pdMS_TO_TICKS(kSendTimeoutMs)) >= 0;
 }
 static void SendJson(const char* type, std::initializer_list<std::pair<const char*, const char*>> fields) {
     Json message(cJSON_CreateObject());
@@ -102,11 +108,104 @@ static void SendJson(const char* type, std::initializer_list<std::pair<const cha
     SendText(Print(message.value));
 }
 
+// MCP (docs/mcp-protocol.md): the server discovers the camera through tools/list and then calls it.
+// The reply travels as {"type":"mcp","payload":<JSON-RPC 2.0>}.
+static void SendMcp(cJSON* payload) {  // takes ownership of payload
+    Json message(cJSON_CreateObject());
+    { std::lock_guard<std::mutex> lock(ws_mutex); cJSON_AddStringToObject(message.value, "session_id", session_id.c_str()); }
+    cJSON_AddStringToObject(message.value, "type", "mcp");
+    cJSON_AddItemToObject(message.value, "payload", payload);
+    SendText(Print(message.value));
+}
+static cJSON* McpResult(double id) {
+    auto* payload = cJSON_CreateObject();
+    cJSON_AddStringToObject(payload, "jsonrpc", "2.0");
+    cJSON_AddNumberToObject(payload, "id", id);
+    return payload;
+}
+static void McpError(double id, const char* message) {
+    auto* payload = McpResult(id);
+    auto* error = cJSON_AddObjectToObject(payload, "error");
+    cJSON_AddNumberToObject(error, "code", -32603);
+    cJSON_AddStringToObject(error, "message", message);
+    SendMcp(payload);
+}
+// Taking and uploading a photo takes seconds, so it runs in its own task.
+struct PhotoRequest { double id; std::string question; };
+static void PhotoTask(void* argument) {
+    std::unique_ptr<PhotoRequest> request(static_cast<PhotoRequest*>(argument));
+    std::string url, token;
+    { std::lock_guard<std::mutex> lock(ws_mutex); url = vision_url; token = vision_token; }
+    const std::string answer = CameraExplain(url, token, request->question);
+    if (answer.empty()) McpError(request->id, "The camera could not take or upload a photo");
+    else {
+        auto* payload = McpResult(request->id);
+        auto* result = cJSON_AddObjectToObject(payload, "result");
+        auto* content = cJSON_AddArrayToObject(result, "content");
+        auto* item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "type", "text");
+        cJSON_AddStringToObject(item, "text", answer.c_str());
+        cJSON_AddItemToArray(content, item);
+        cJSON_AddBoolToObject(result, "isError", false);
+        SendMcp(payload);
+    }
+    vTaskDelete(nullptr);
+}
+static void OnMcp(const cJSON* payload) {
+    const std::string method = Text(payload, "method");
+    const auto* id_item = cJSON_GetObjectItemCaseSensitive(payload, "id");
+    const double id = cJSON_IsNumber(id_item) ? id_item->valuedouble : 0;
+    if (method == "initialize") {
+        const auto* vision = cJSON_GetObjectItemCaseSensitive(
+            cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(payload, "params"), "capabilities"), "vision");
+        {
+            std::lock_guard<std::mutex> lock(ws_mutex);
+            vision_url = Text(vision, "url"); vision_token = Text(vision, "token");
+        }
+        ESP_LOGI(kTag, "MCP ready; vision service %s", vision_url.empty() ? "not offered" : "available");
+        auto* payload_out = McpResult(id);
+        auto* result = cJSON_AddObjectToObject(payload_out, "result");
+        cJSON_AddStringToObject(result, "protocolVersion", "2024-11-05");
+        cJSON_AddObjectToObject(cJSON_AddObjectToObject(result, "capabilities"), "tools");
+        auto* info = cJSON_AddObjectToObject(result, "serverInfo");
+        cJSON_AddStringToObject(info, "name", "bitbot");
+        cJSON_AddStringToObject(info, "version", "0.1.0");
+        SendMcp(payload_out);
+    } else if (method == "tools/list") {
+        auto* payload_out = McpResult(id);
+        auto* result = cJSON_AddObjectToObject(payload_out, "result");
+        auto* tools = cJSON_AddArrayToObject(result, "tools");
+        if (CameraReady()) {
+            auto* tool = cJSON_CreateObject();
+            cJSON_AddStringToObject(tool, "name", "self.camera.take_photo");
+            cJSON_AddStringToObject(tool, "description",
+                                    "You have a camera. When the user asks what you see, or about anything in front of "
+                                    "you, take a photo with this tool and answer from it.\nArgs:\n  `question`: what to "
+                                    "look for in the photo.");
+            auto* schema = cJSON_AddObjectToObject(tool, "inputSchema");
+            cJSON_AddStringToObject(schema, "type", "object");
+            auto* properties = cJSON_AddObjectToObject(schema, "properties");
+            auto* question = cJSON_AddObjectToObject(properties, "question");
+            cJSON_AddStringToObject(question, "type", "string");
+            auto* required = cJSON_AddArrayToObject(schema, "required");
+            cJSON_AddItemToArray(required, cJSON_CreateString("question"));
+            cJSON_AddItemToArray(tools, tool);
+        }
+        cJSON_AddStringToObject(result, "nextCursor", "");
+        SendMcp(payload_out);
+    } else if (method == "tools/call") {
+        const auto* params = cJSON_GetObjectItemCaseSensitive(payload, "params");
+        if (strcmp(Text(params, "name"), "self.camera.take_photo") != 0) { McpError(id, "Unknown tool"); return; }
+        auto* request = new PhotoRequest{id, Text(cJSON_GetObjectItemCaseSensitive(params, "arguments"), "question")};
+        SetDisplayCaption("Looking ...");
+        if (xTaskCreate(PhotoTask, "photo", 8192, request, 4, nullptr) != pdPASS) { delete request; McpError(id, "Busy"); }
+    }
+}
 static void OnJson(const std::string& text) {
     Json message(cJSON_Parse(text.c_str()));
     const std::string type = Text(message.value, "type");
     if (type != "tts" || strcmp(Text(message.value, "state"), "sentence_start") != 0)
-        ESP_LOGI(kTag, "Server: %.200s", text.c_str());
+        ESP_LOGD(kTag, "Server: %.200s", text.c_str());
     if (type == "hello") {
         { std::lock_guard<std::mutex> lock(ws_mutex); session_id = Text(message.value, "session_id"); }
         xEventGroupSetBits(ws_events, kWsHello);
@@ -121,6 +220,8 @@ static void OnJson(const std::string& text) {
         if (state == "start") { tts_done = false; voice = Voice::Speaking; }
         else if (state == "sentence_start") Caption(Text(message.value, "text"));
         else if (state == "stop") tts_done = true;
+    } else if (type == "mcp") {
+        OnMcp(cJSON_GetObjectItemCaseSensitive(message.value, "payload"));
     } else if (type == "system" && strcmp(Text(message.value, "command"), "reboot") == 0) {
         ESP_LOGW(kTag, "Server asked for a reboot; ignored");  // ponytail: not needed yet
     }
@@ -186,17 +287,17 @@ static void OpenSession(const char* wake_phrase) {
     config.uri = url.c_str(); config.headers = headers.c_str();
     config.crt_bundle_attach = esp_crt_bundle_attach;  // TLS verified against the IDF CA bundle
     config.disable_auto_reconnect = true;
-    config.buffer_size = 2048; config.task_stack = 6144; config.network_timeout_ms = 10000;
+    config.buffer_size = 2048; config.task_stack = 6144; config.network_timeout_ms = 20000;  // first TLS handshake to this server measured ~7 s
     xEventGroupClearBits(ws_events, kWsConnected | kWsHello | kWsClosed);
     auto* client = esp_websocket_client_init(&config);
     if (!client) { CloseSession("no memory for WebSocket"); return; }
     esp_websocket_register_events(client, WEBSOCKET_EVENT_ANY, OnWebsocket, nullptr);
     { std::lock_guard<std::mutex> lock(ws_mutex); ws = client; }
     if (esp_websocket_client_start(client) != ESP_OK ||
-        !(xEventGroupWaitBits(ws_events, kWsConnected | kWsClosed, pdFALSE, pdFALSE, pdMS_TO_TICKS(10000)) & kWsConnected)) {
+        !(xEventGroupWaitBits(ws_events, kWsConnected | kWsClosed, pdFALSE, pdFALSE, pdMS_TO_TICKS(20000)) & kWsConnected)) {
         CloseSession("could not connect"); return;
     }
-    SendText(R"({"type":"hello","version":1,"transport":"websocket","audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":60}})");
+    SendText(R"({"type":"hello","version":1,"features":{"mcp":true},"transport":"websocket","audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":60}})");
     if (!(xEventGroupWaitBits(ws_events, kWsHello | kWsClosed, pdFALSE, pdFALSE, pdMS_TO_TICKS(10000)) & kWsHello)) {
         CloseSession("no hello from server"); return;
     }
@@ -218,14 +319,14 @@ static void VoiceTask(void*) {
         const bool available = net == State::Idle && GetXiaozhiWebsocket(url, token);
         const Voice now = voice.load();
         if (now == Voice::Off) {
-            if (available) { voice = Voice::Idle; ESP_LOGI(kTag, "Ready: say \"hey bitbot\" or press the button"); }
+            if (available) { voice = Voice::Idle; ESP_LOGI(kTag, "Ready: say \"hey robot\" or press the button"); }
             button_pressed = wake_heard = false;
             continue;
         }
         if (now == Voice::Idle) {
             if (!available) { voice = Voice::Off; continue; }
             const bool woke = wake_heard.exchange(false), pressed = button_pressed.exchange(false);
-            if (woke || pressed) { Chirp(); OpenSession(woke ? "hey bitbot" : nullptr); }
+            if (woke || pressed) { Chirp(); OpenSession(woke ? "hey robot" : nullptr); }
             continue;
         }
         // In a conversation. Once a second: what went up and down, and how loud the mic was.
@@ -233,8 +334,9 @@ static void VoiceTask(void*) {
         if (NowMs() >= log_at) {
             log_at = NowMs() + 1000;
             int peak = mic_peak.exchange(0);
-            ESP_LOGI(kTag, "state %d, sent %d, received %d Opus frames, played %d ms, mic peak %d dBFS", static_cast<int>(now),
-                     sent_frames.exchange(0), received_frames.exchange(0), played_samples.exchange(0) * 1000 / kAudioRate,
+            ESP_LOGI(kTag, "state %d, sent %d, received %d Opus frames, played %d ms, gaps %d, mic peak %d dBFS",
+                     static_cast<int>(now), sent_frames.exchange(0), received_frames.exchange(0),
+                     played_samples.exchange(0) * 1000 / kAudioRate, underruns.load(),
                      peak ? static_cast<int>(20 * log10f(peak / 32768.0f)) : -99);
         }
         if (button_pressed.exchange(false)) { SendJson("abort", {{"reason", "user"}}); CloseSession("button"); continue; }
@@ -265,23 +367,10 @@ static void VoiceTask(void*) {
     }
 }
 
-// The microphone path runs through esp-sr's AFE (noise suppression + automatic gain), the same
-// front end XiaoZhi uses. Raw mic audio is too quiet and too noisy for the wake phrase recogniser.
-static const esp_afe_sr_iface_t* afe = nullptr;
-static esp_afe_sr_data_t* afe_data = nullptr;
-
-// Reads I2S and feeds AFE, in chunks of exactly the size AFE asks for.
+// One task owns the microphone: the wake phrase while idle or speaking, the Opus uplink while
+// listening. ponytail: esp-sr's AFE front end sits in front of this in XiaoZhi, but with one mic and
+// no echo reference it stopped MultiNet from recognising anything at all, so the mic feeds itdirectly.
 static void MicTask(void*) {
-    const int chunk = afe->get_feed_chunksize(afe_data);
-    std::vector<int16_t> block(chunk);
-    for (;;) {
-        if (!ReadMic(block.data(), block.size())) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
-        for (int16_t sample : block) mic_peak = std::max<int>(mic_peak, std::abs(sample));
-        afe->feed(afe_data, block.data());
-    }
-}
-// Takes the cleaned audio: wake phrase while idle or speaking, Opus uplink while listening.
-static void ListenTask(void*) {
     esp_mn_iface_t* multinet = nullptr;
     model_iface_data_t* model = nullptr;
     if (srmodel_list_t* models = esp_srmodel_init("model")) {
@@ -311,14 +400,14 @@ static void ListenTask(void*) {
     esp_opus_enc_get_frame_size(encoder, &in_size, &out_size);
     std::vector<uint8_t> opus(std::max(out_size, 512));
 
-    std::vector<int16_t> wake_buffer, frame;
+    std::vector<int16_t> block(320), wake_buffer, frame;  // 20 ms per read
     wake_buffer.reserve(mn_chunk * 2); frame.reserve(kFrameSamples);
     Voice previous = Voice::Off;
     for (;;) {
-        afe_fetch_result_t* result = afe->fetch(afe_data);
-        if (!result || result->ret_value != ESP_OK) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
-        const int16_t* clean = result->data;
-        const int samples = result->data_size / 2;
+        if (!ReadMic(block.data(), block.size())) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
+        const int16_t* clean = block.data();
+        const int samples = block.size();
+        for (int i = 0; i < samples; ++i) mic_peak = std::max<int>(mic_peak, std::abs(clean[i]));
         const Voice now = voice.load();
         if (now != previous) { wake_buffer.clear(); frame.clear(); if (model) multinet->clean(model); previous = now; }
         if ((now == Voice::Idle || now == Voice::Speaking) && model) {
@@ -341,7 +430,7 @@ static void ListenTask(void*) {
                 esp_audio_enc_out_frame_t out = {opus.data(), static_cast<uint32_t>(opus.size()), 0, 0};
                 if (esp_opus_enc_process(encoder, &in, &out) == ESP_AUDIO_ERR_OK && out.encoded_bytes > 0) {
                     std::lock_guard<std::mutex> lock(ws_mutex);
-                    if (ws && esp_websocket_client_send_bin(ws, reinterpret_cast<const char*>(opus.data()), out.encoded_bytes, pdMS_TO_TICKS(200)) > 0) ++sent_frames;
+                    if (ws && esp_websocket_client_send_bin(ws, reinterpret_cast<const char*>(opus.data()), out.encoded_bytes, pdMS_TO_TICKS(kSendTimeoutMs)) > 0) ++sent_frames;
                 }
                 frame.erase(frame.begin(), frame.begin() + kFrameSamples);
             }
@@ -356,9 +445,22 @@ static void SpeakerTask(void*) {
     void* decoder = nullptr;
     if (esp_opus_dec_open(&config, sizeof(config), &decoder) != ESP_AUDIO_ERR_OK) ESP_LOGE(kTag, "Opus decoder failed");
     std::vector<uint8_t> pcm(kAudioRate * 2 * 120 / 1000);  // room for 120 ms
+    // Network audio arrives in bursts. Playing each packet the moment it lands leaves gaps in the
+    // I2S stream, which come out as crackle, so a few packets are collected before the speaker starts.
+    static constexpr int kPrebufferPackets = 5;  // 5 x 60 ms = 300 ms; ponytail: raise if it still breaks up
+    bool playing = false;
     for (;;) {
+        if (!playing) {
+            if (uxQueueMessagesWaiting(playback) < kPrebufferPackets && !tts_done) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
+            playing = true;
+        }
         Packet packet;
-        if (xQueueReceive(playback, &packet, portMAX_DELAY) != pdTRUE) continue;
+        if (xQueueReceive(playback, &packet, pdMS_TO_TICKS(200)) != pdTRUE) {
+            // Ran dry: if the server is still speaking, that gap is audible as a crack.
+            if (!tts_done && ++underruns % 5 == 1) ESP_LOGW(kTag, "Audio ran out mid-reply (%d times); network jitter", underruns.load());
+            playing = false;
+            continue;
+        }
         esp_audio_dec_in_raw_t raw = {packet.data, static_cast<uint32_t>(packet.size), 0, ESP_AUDIO_DEC_RECOVERY_NONE};
         esp_audio_dec_out_frame_t out = {pcm.data(), static_cast<uint32_t>(pcm.size()), 0, 0};
         esp_audio_dec_info_t info = {};
@@ -375,23 +477,13 @@ static void SpeakerTask(void*) {
 }
 
 void StartVoice() {
+    InitCamera();  // optional: without it BitBot simply has no photo tool to offer
     if (!InitAudio()) { ESP_LOGE(kTag, "No audio: voice disabled"); return; }
     ws_events = xEventGroupCreate();
     playback = xQueueCreate(64, sizeof(Packet));
     SetVolume(ReadPrefs().volume);
     // Opus encoding and MultiNet need deep stacks. Audio work stays on core 1, away from Wi-Fi on core 0.
-    srmodel_list_t* models = esp_srmodel_init("model");
-    afe_config_t* afe_config = afe_config_init("M", models, AFE_TYPE_SR, AFE_MODE_LOW_COST);
-    afe_config->wakenet_init = false;  // the wake phrase is MultiNet's job, not WakeNet's
-    afe_config->aec_init = false;      // no echo canceller: one mic, no reference channel
-    afe_config->vad_init = false;      // the server decides when the sentence ends
-    afe_config->ns_init = true; afe_config->agc_init = true;
-    afe = esp_afe_handle_from_config(afe_config);
-    afe_data = afe->create_from_config(afe_config);
-    afe_config_free(afe_config);
-    if (!afe_data) { ESP_LOGE(kTag, "AFE failed: voice disabled"); return; }
-    xTaskCreatePinnedToCore(MicTask, "mic", 8 * 1024, nullptr, 6, nullptr, 1);
-    xTaskCreatePinnedToCore(ListenTask, "listen", 40 * 1024, nullptr, 6, nullptr, 1);
+    xTaskCreatePinnedToCore(MicTask, "mic", 40 * 1024, nullptr, 6, nullptr, 1);
     xTaskCreatePinnedToCore(SpeakerTask, "speaker", 24 * 1024, nullptr, 7, nullptr, 1);
     xTaskCreate(VoiceTask, "voice", 6144, nullptr, 5, nullptr);
 }

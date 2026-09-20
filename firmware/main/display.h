@@ -20,4 +20,6 @@ void SetDisplayPages(std::vector<Page> pages);
 void SetDisplayCaption(std::string text);
 // Dim everything (idle/sleep). The backlight is wired to 3V3, so this darkens the pixels.
 void SetDisplayDim(bool dim);
+// Show a picture (RGB565) over the face for a while: what the camera just saw.
+void SetDisplayImage(const uint16_t* pixels, int width, int height, int ms);
 }

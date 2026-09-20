@@ -104,11 +104,32 @@ initialize an SD card on the shared Sense SPI wiring. GPIO6 is unused; there is
 no battery sensing. See [hardware review](docs/hardware.md).
 
 The display is enabled by default (**BitBot hardware bring-up → Enable verified
-8-pin ST7789 240x240 display wiring** in `idf.py menuconfig`). The test shows
-blinking eyes, a status stripe, and red/green/blue test bars. Color inversion,
-RGB/BGR order, and row offset are configurable. Physical panel validation is
-still required. Setup text, UTF-8 captions, and backlight dimming are not yet
-implemented; the password currently remains on the serial console.
+8-pin ST7789 240x240 display wiring** in `idf.py menuconfig`). It shows the face
+(twelve expressions, blinking, eyes that look around) in the top 168 rows and
+text below: setup instructions with the hotspot password, the XiaoZhi pairing
+code, and conversation captions. Colour inversion, RGB/BGR order, row offset and
+SPI clock are configurable. The backlight has no GPIO, so "sleep" dims the
+pixels instead.
+
+## Talking to it
+
+Verified end to end against XiaoZhi on 2026-09-20: microphone → Opus → XiaoZhi →
+reply text and Opus audio → speaker, with captions and expressions on screen.
+
+| | |
+| --- | --- |
+| Start a conversation | Short press of BOOT or the D2 button, or a wake phrase |
+| Wake phrases | "hey robot", "hey bit robot", "okay robot", "hi robot" |
+| Interrupt a reply | Say a wake phrase, or press the button |
+| End it | Press the button, or stay quiet (the idle timeout from settings) |
+| Camera | XiaoZhi asks for a photo when you ask what it sees; the photo appears on screen |
+
+The wake phrases are not "hey bitbot", and that is a limitation of the
+recogniser, not a choice: esp-sr's English MultiNet only matches phrases built
+from real English words. Measured on this board by feeding recorded clips
+directly into the recogniser, "hey robot" and "hey bit robot" are recognised,
+while "hey bitbot", "hey bit bot" and even "hey bot" never are. A real
+"hey bitbot" needs a WakeNet model trained on that phrase.
 
 ## Project map
 

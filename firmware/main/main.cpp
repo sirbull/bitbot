@@ -24,7 +24,7 @@ static std::vector<Page> Guide(State state, const std::string& ssid, const std::
     switch (xiaozhi.pairing) {
         case Pairing::Checking: return {{"Connecting to", "XiaoZhi ..."}};
         case Pairing::Code: return {{"1. Go to", "xiaozhi.me"}, {"2. Tap Console", "and sign in"}, {"3. Add a device", "with the code"}, {"Your code is", xiaozhi.code}};
-        case Pairing::Paired: return {{"Say \"Hey BitBot\"", ""}};
+        case Pairing::Paired: return {{"Say \"Hey Robot\"", ""}};
         case Pairing::Failed: return {{"Can't reach", "XiaoZhi"}, {"Retrying", "shortly"}};
         case Pairing::Off: break;
     }

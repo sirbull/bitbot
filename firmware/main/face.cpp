@@ -118,8 +118,8 @@ static uint16_t Mix(uint16_t a, uint16_t b, float t) {
     return lerp(a >> 11, b >> 11) << 11 | lerp(a >> 5 & 63, b >> 5 & 63) << 5 | lerp(a & 31, b & 31);
 }
 void RenderFace(Expression expression, Pose pose, uint16_t* out) {
-    for (int y = kFaceY; y < kFaceY + kFaceH; ++y) {
-        for (int x = kFaceX; x < kFaceX + kFaceW; ++x) {
+    for (int y = 0; y < kFaceH; ++y) {
+        for (int x = 0; x < kFaceW; ++x) {
             uint16_t color = kBackground;
             for (int side = 0; side < 2; ++side) {
                 float dx = x - (side ? kEyeRight : kEyeLeft), lights;
@@ -132,7 +132,7 @@ void RenderFace(Expression expression, Pose pose, uint16_t* out) {
                 color = Mix(color, kEye, Coverage(d));
                 color = Mix(color, kHighlight, Coverage(d) * Coverage(lights));
             }
-            out[(y - kFaceY) * kFaceW + x - kFaceX] = color;
+            out[y * kFaceW + x] = color;
         }
     }
 }

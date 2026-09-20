@@ -76,7 +76,11 @@ flowchart LR
   end
 ```
 
-The commissioning build does not capture microphone/camera data or call an
+Update 2026-09-20: the conversation path above is implemented. The microphone is
+only captured after a wake phrase or a button press, and the camera only when
+the assistant asks for a photo through MCP.
+
+The commissioning build itself does not capture microphone/camera data or call an
 AI provider. Independent conversation/speech providers, personality, voice, and
 display preferences are stored for integration; saving them must not imply that
 those integrations exist.

@@ -27,8 +27,8 @@ Camera allocation is fixed:
 | VSYNC / HREF / PCLK | 38 / 47 / 13 |
 | Sensor RESET / PWDN | Not exposed as separate GPIO in Seeed example |
 
-Do not assume the bundled camera is always OV2640: revisions also use OV3660.
-Identify the fitted sensor and use the camera driver's identification.
+The fitted sensor on this unit is an **OV3660** (identified on hardware
+2026-09-19), not the OV2640 some revisions carry.
 
 ## Signal allocation, pending physical validation
 
@@ -50,7 +50,7 @@ its strapping role only applies with the STRAP_JTAG_SEL eFuse burned. Do not cut
 | INMP441 + amplifier WS | D7 / 44 | TBD | Shared standard I2S frame clock; UART0 RX unavailable |
 | INMP441 SD → ESP RX | D9 / 8 | TBD | SD card absent; 3.3 V mic supply |
 | ESP TX → MAX98357A DIN | D0 / 1 | TBD | Separate from microphone data |
-| Setup button | Onboard BOOT / 0 | Verified onboard | Press after boot, not during reset |
+| Setup button | Onboard BOOT / 0 | Verified onboard | Hold 3 s for setup, short press to talk |
 | External setup button | D2 / 3, to GND | Optional | Internal pull-up; hold 3 s after boot, like BOOT |
 
 The original eight-signal assumption exhausted the non-strapping header pins.

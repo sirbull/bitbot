@@ -11,13 +11,13 @@ static i2s_chan_handle_t tx = nullptr, rx = nullptr;
 static std::atomic<float> gain{0.5f};
 // INMP441 gives 24-bit samples left-aligned in 32-bit slots and is quiet; >> 12 keeps
 // 4 bits of headroom above int16, the same digital gain XiaoZhi uses for this mic.
-static constexpr int kMicShift = 14;  // ponytail: calibration knob; lower = louder, clips sooner.
+static constexpr int kMicShift = 13;  // ponytail: calibration knob; lower = louder, clips sooner.
                                       // 12 clipped at 0 dBFS on this mic and wrecked the transcription.
 
 bool InitAudio() {
     i2s_chan_config_t chan = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     chan.auto_clear = true;  // silence on the speaker whenever nothing is written
-    chan.dma_desc_num = 6; chan.dma_frame_num = 240;
+    chan.dma_desc_num = 8; chan.dma_frame_num = 240;  // 120 ms of DMA buffer: room for network jitter
     if (i2s_new_channel(&chan, &tx, &rx) != ESP_OK) return false;
     // Stereo 32-bit slots: the mic answers in the left slot (L/R to GND), the amp mixes L+R.
     i2s_std_config_t std = {

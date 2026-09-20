@@ -7,7 +7,7 @@ BitBot has no motors, servos or wheels.
 | # | Component | Model / specification | Qty | Interface | Status |
 | --- | --- | --- | --- | --- | --- |
 | 1 | Microcontroller | Seeed Studio XIAO ESP32-S3 Sense (8 MB flash, 8 MB PSRAM, Wi-Fi, USB-C) | 1 | — | Confirmed |
-| 2 | Camera | Included with XIAO Sense (OV2640 or OV3660, depending on revision) | 1 | DVP/SCCB | Sensor type must be identified |
+| 2 | Camera | Included with XIAO Sense; this unit has an **OV3660** | 1 | DVP/SCCB | Verified on hardware 2026-09-19 |
 | 3 | Built-in microphone | PDM microphone on the Sense board (GPIO 42/41) | 1 | PDM | Included, not planned for use |
 | 4 | Display | 1.54" ST7789 TFT, 240×240, 8 pins (GND, VCC, SCL, SDA, RST, DC, CS, BL) | 1 | SPI | Verified on hardware 2026-09-19 |
 | 5 | Microphone | INMP441 digital MEMS microphone, 1.8–3.3 V | 1 | I2S | Module pinout must be verified |

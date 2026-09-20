@@ -77,7 +77,9 @@ void StartStation() {
         shared.state = State::Error;
         return;
     }
-    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    // Modem sleep adds up to a beacon interval of latency, which stalls the Opus uplink long
+    // enough for the WebSocket write to time out and abort a conversation. Voice beats battery.
+    esp_wifi_set_ps(WIFI_PS_NONE);
     shared.state = State::Offline;
 }
 void OpenSetup() {

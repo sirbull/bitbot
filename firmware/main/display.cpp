@@ -30,6 +30,10 @@ static std::vector<Page> pages;
 static bool pages_changed = false;
 static std::string caption;
 static std::atomic<bool> dim{false};
+static std::mutex image_mutex;
+static uint16_t* image = nullptr;        // PSRAM copy of the last photo
+static int image_w = 0, image_h = 0;
+static int64_t image_until = 0;
 static bool dim_drawn = false;
 
 static bool TransferDone(esp_lcd_panel_io_handle_t, esp_lcd_panel_io_event_data_t*, void*) {
@@ -63,18 +67,24 @@ static const uint16_t* Pixels(Frame frame) {
     if (rendered != frame.face) RenderFace(rendered = frame.face, kOpen, other);
     return other;
 }
-// Only a copy into the DMA buffer and the SPI transfer: a few ms at 40 MHz.
+// The same rectangle every time, with the drawing shifted by ox/oy inside it: a copy into the DMA
+// buffer and the SPI transfer, a few ms at 40 MHz.
 static bool ShowFrame(Frame frame, int ox, int oy) {
     const uint16_t* face = Pixels(frame);
     for (int top = 0; top < kFaceH; top += kRows) {
         int rows = std::min(kRows, kFaceH - top);
-        if (dim.load()) {
-            // Halve each RGB565 channel: a sleeping face, without a backlight pin to turn down.
-            for (int i = 0; i < rows * kFaceW; ++i) { uint16_t c = face[top * kFaceW + i]; pixels[i] = (c >> 1 & 0x7800) | (c >> 1 & 0x03e0) | (c >> 1 & 0x000f); }
-        } else {
-            std::copy_n(face + top * kFaceW, rows * kFaceW, pixels);
+        for (int row = 0; row < rows; ++row) {
+            uint16_t* out = pixels + row * kFaceW;
+            int source = top + row - oy;
+            if (source < 0 || source >= kFaceH) { std::fill_n(out, kFaceW, kBackground); continue; }
+            const uint16_t* in = face + source * kFaceW;
+            std::fill_n(ox >= 0 ? out : out + kFaceW + ox, std::abs(ox), kBackground);
+            std::copy_n(ox >= 0 ? in : in - ox, kFaceW - std::abs(ox), ox >= 0 ? out + ox : out);
         }
-        if (!Blit(kFaceX + ox, kFaceY + oy + top, kFaceW, rows)) return false;
+        // Halve each RGB565 channel: a sleeping face, without a backlight pin to turn down.
+        if (dim.load())
+            for (int i = 0; i < rows * kFaceW; ++i) { uint16_t c = pixels[i]; pixels[i] = (c >> 1 & 0x7800) | (c >> 1 & 0x03e0) | (c >> 1 & 0x000f); }
+        if (!Blit(0, top, kFaceW, rows)) return false;
     }
     return true;
 }
@@ -122,6 +132,28 @@ bool InitDisplay() {
     return true;
 }
 bool DisplayReady() { return ready.load(); }
+void SetDisplayImage(const uint16_t* source, int width, int height, int ms) {
+    if (!ready.load() || width > kWidth || height > kFaceBottom) return;
+    std::lock_guard<std::mutex> lock(image_mutex);
+    uint16_t* copy = static_cast<uint16_t*>(heap_caps_malloc(width * height * 2, MALLOC_CAP_SPIRAM));
+    if (!copy) return;
+    std::copy_n(source, width * height, copy);
+    heap_caps_free(image);
+    image = copy; image_w = width; image_h = height; image_until = NowMs() + ms;
+}
+// Centred in the face area, with the rest of it cleared.
+static bool ShowImage() {
+    std::lock_guard<std::mutex> lock(image_mutex);
+    if (!image) return false;
+    const int x = (kWidth - image_w) / 2, y = (kFaceBottom - image_h) / 2;
+    if (!Fill(0, 0, kWidth, y, kBackground)) return false;
+    for (int row = 0; row < image_h; row += kRows) {
+        int rows = std::min(kRows, image_h - row);
+        std::copy_n(image + row * image_w, rows * image_w, pixels);
+        if (!Blit(x, y + row, image_w, rows)) return false;
+    }
+    return Fill(0, y + image_h, kWidth, kFaceBottom - y - image_h, kBackground);
+}
 // UTF-8 to font indices: ASCII plus æøåÆØÅ; anything else becomes '?'.
 static std::vector<uint8_t> Glyphs(const std::string& text) {
     static const char* extra[] = {"æ", "ø", "å", "Æ", "Ø", "Å"};
@@ -135,28 +167,65 @@ static std::vector<uint8_t> Glyphs(const std::string& text) {
     }
     return out;
 }
-struct Run { std::vector<uint8_t> glyphs; int x, y, scale; uint16_t color; };
-// Centred, at the largest scale up to max_scale that fits the width.
-static Run Layout(const std::string& text, int y, int max_scale, uint16_t color) {
-    Run run{Glyphs(text), 0, y, max_scale, dim.load() ? kTextDim : color};
+// Scale is counted in half-pixels, so 3 is 1.5x: a font pixel becomes a 1 or 2 px block.
+struct Run { std::vector<uint8_t> glyphs; int x, y, halves; uint16_t color; };
+static constexpr int Scaled(int font_px, int halves) { return font_px * halves / 2; }
+// Centred, at the largest scale up to max_halves that fits the width.
+static Run Layout(const std::string& text, int y, int max_halves, uint16_t color) {
+    Run run{Glyphs(text), 0, y, max_halves, dim.load() ? kTextDim : color};
     int n = static_cast<int>(run.glyphs.size());
-    while (run.scale > 1 && n * 6 * run.scale - run.scale > kWidth - 8) --run.scale;
-    run.x = std::max(0, (kWidth - (n * 6 * run.scale - run.scale)) / 2);
+    auto width = [&] { return Scaled(n * 6 - 1, run.halves); };
+    while (run.halves > 2 && width() > kWidth - 8) --run.halves;
+    run.x = std::max(0, (kWidth - width()) / 2);
     return run;
 }
-// Paints the part of a run that falls inside the stripe starting at row top.
+// Overlap between output pixel `out` and font pixel `k` on one axis, measured in 1/halves of a font
+// pixel: an output pixel is 2 of those units wide, a font pixel is `halves`.
+static constexpr int Overlap(int out, int k, int halves) {
+    int lo = std::max(out * 2, k * halves), hi = std::min(out * 2 + 2, (k + 1) * halves);
+    return hi > lo ? hi - lo : 0;
+}
+// A font pixel must hand out exactly its own area, no more: otherwise strokes gain or lose weight.
+static constexpr bool CoverageAddsUp(int halves) {
+    for (int k = 0; k < 7; ++k) {
+        int sum = 0;
+        for (int out = 0; out <= (k + 1) * halves; ++out) sum += Overlap(out, k, halves);
+        if (sum != halves) return false;
+    }
+    return true;
+}
+static_assert(CoverageAddsUp(2) && CoverageAddsUp(3) && CoverageAddsUp(4), "antialiasing must conserve stroke weight");
+// `over` at num/den coverage on top of `under`, per RGB565 channel.
+static uint16_t Mix(uint16_t under, uint16_t over, int num, int den) {
+    int r = ((over >> 11 & 0x1f) * num + (under >> 11 & 0x1f) * (den - num)) / den;
+    int g = ((over >> 5 & 0x3f) * num + (under >> 5 & 0x3f) * (den - num)) / den;
+    int b = ((over & 0x1f) * num + (under & 0x1f) * (den - num)) / den;
+    return static_cast<uint16_t>(r << 11 | g << 5 | b);
+}
+// Paints the part of a run that falls inside the stripe starting at row top. Each output pixel takes
+// the share of the font pixels it covers, so half-covered edges come out half-bright. At a whole
+// scale every pixel lands fully inside one font pixel and this is the old on/off block fill; at 1.5x
+// it antialiases the halves instead of rounding them up or down to a whole pixel.
 static void Paint(const Run& run, int top) {
-    for (size_t i = 0; i < run.glyphs.size(); ++i)
-        for (int col = 0; col < 5; ++col)
-            for (int row = 0; row < 7; ++row) {
-                if (!(kFont5x7[run.glyphs[i]][col] >> row & 1)) continue;
-                int x0 = run.x + (static_cast<int>(i) * 6 + col) * run.scale, y0 = run.y + row * run.scale;
-                for (int y = std::max(y0, top); y < std::min(y0 + run.scale, top + kRows); ++y)
-                    for (int x = x0; x < std::min(x0 + run.scale, kWidth); ++x) pixels[(y - top) * kWidth + x] = run.color;
-            }
+    const int halves = run.halves, n = static_cast<int>(run.glyphs.size());
+    const int width = Scaled(n * 6 - 1, halves) + 1, height = Scaled(7, halves) + 1;
+    for (int y = std::max(run.y, top); y < std::min({run.y + height, top + kRows, kHeight}); ++y)
+        for (int x = run.x; x < std::min(run.x + width, kWidth); ++x) {
+            const int lx = x - run.x, ly = y - run.y;
+            int covered = 0;
+            for (int fy = ly * 2 / halves; fy <= (ly * 2 + 1) / halves && fy < 7; ++fy)
+                for (int fx = lx * 2 / halves; fx <= (lx * 2 + 1) / halves; ++fx) {
+                    const int glyph = fx / 6, col = fx % 6;
+                    if (col == 5 || glyph >= n) continue;  // the blank column between glyphs
+                    if (!(kFont5x7[run.glyphs[glyph]][col] >> fy & 1)) continue;
+                    covered += Overlap(ly, fy, halves) * Overlap(lx, fx, halves);
+                }
+            uint16_t& out = pixels[(y - top) * kWidth + x];
+            if (covered) out = covered >= 4 ? run.color : Mix(out, run.color, covered, 4);
+        }
 }
 static bool DrawPage(const Page& page) {
-    const Run runs[] = {Layout(page.first, kTextTop + 10, 2, kTextSmall), Layout(page.second, kTextTop + 32, 3, kTextBig)};
+    const Run runs[] = {Layout(page.first, kTextTop + 10, 4, kTextSmall), Layout(page.second, kTextTop + 30, 4, kTextBig)};
     for (int top = kTextTop; top < kHeight; top += kRows) {
         std::fill_n(pixels, kWidth * kRows, kBackground);
         for (const auto& run : runs) Paint(run, top);
@@ -164,9 +233,12 @@ static bool DrawPage(const Page& page) {
     }
     return true;
 }
-// Word-wraps at the small scale; if it runs long, the last four lines are the ones that matter.
+// Word-wraps; if it runs long, the last kLines lines are the ones that matter.
+// ponytail: bigger text means fewer characters fit (5 x 25); lower kHalves if captions get clipped.
 static bool DrawCaption(const std::string& text) {
-    constexpr int kScale = 2, kPerLine = (kWidth - 8) / (6 * kScale), kLines = 4, kLineH = 18;
+    constexpr int kHalves = 3, kGlyphH = Scaled(7, kHalves) + 1;  // 1.5x, plus the antialiased edge
+    constexpr int kPerLine = (kWidth - 8) / Scaled(6, kHalves), kLines = 5, kLineH = kGlyphH + 3;
+    static_assert(kHeight - 4 - kGlyphH - (kLines - 1) * kLineH >= kTextTop, "caption block must not reach into the face");
     std::vector<std::string> lines(1);
     size_t start = 0;
     while (start < text.size()) {
@@ -181,7 +253,9 @@ static bool DrawCaption(const std::string& text) {
     }
     if (lines.size() > kLines) lines.erase(lines.begin(), lines.end() - kLines);
     std::vector<Run> runs;
-    for (size_t i = 0; i < lines.size(); ++i) runs.push_back(Layout(lines[i], kTextTop + 2 + static_cast<int>(i) * kLineH, kScale, kTextBig));
+    // Anchored to the bottom edge: the text grows upwards, so the last line never moves.
+    const int first = kHeight - 4 - kGlyphH - (static_cast<int>(lines.size()) - 1) * kLineH;
+    for (size_t i = 0; i < lines.size(); ++i) runs.push_back(Layout(lines[i], first + static_cast<int>(i) * kLineH, kHalves, kTextBig));
     for (int top = kTextTop; top < kHeight; top += kRows) {
         std::fill_n(pixels, kWidth * kRows, kBackground);
         for (const auto& run : runs) Paint(run, top);
@@ -237,7 +311,16 @@ void TickDisplay(State) {
     static int queued = 0, next = 0, x = 0, y = 0, target_x = 0, target_y = 0;
     static int64_t next_frame = 0, blink_at = -1, look_at = 0;
     int64_t now = NowMs();
-    bool dirty = blink_at < 0 || dim_drawn != dim.load();
+    // A photo takes over the face area while it is on screen.
+    static bool showed_image = false;
+    bool showing_image;
+    { std::lock_guard<std::mutex> lock(image_mutex); showing_image = image && now < image_until; }
+    if (showing_image) {
+        if (!showed_image) { showed_image = true; ShowImage(); }
+        return;
+    }
+    bool dirty = blink_at < 0 || dim_drawn != dim.load() || showed_image;
+    showed_image = false;
     dim_drawn = dim.load();
     if (dirty) { blink_at = now + NextBlinkDelay(); look_at = now + NextLookDelay(); }
     if (now < next_frame) return;
@@ -272,8 +355,8 @@ void TickDisplay(State) {
         look_at = now + NextLookDelay();
     }
     if (x != target_x || y != target_y) {
-        x += Step(target_x - x, kPadX);
-        y += Step(target_y - y, kPadY);
+        x += Step(target_x - x, kStepX);
+        y += Step(target_y - y, kStepY);
         dirty = true;
     }
     if (dirty) ShowFrame(current, x, y);

@@ -1,5 +1,5 @@
-// Renders every expression with the firmware's own face.cpp to PNG, and fails if a face reaches the
-// sprite border (moving eyes would leave trails). From firmware/:
+// Renders every expression with the firmware's own face.cpp to PNG, and fails if a face sits so close
+// to an edge that looking that way would clip it. From firmware/:
 //   c++ -std=c++17 -O2 -Imain tools/face_preview.cpp main/face.cpp -lz -o /tmp/face_preview && /tmp/face_preview ../docs/faces
 #include "face.h"
 #include <cstdio>
@@ -41,14 +41,14 @@ static bool WritePng(const std::string& path, const std::vector<uint16_t>& pixel
     return fclose(f) == 0;
 }
 // The whole 240x240 screen with the face at rest and the text area left empty.
-static std::vector<uint16_t> Screen(Expression expression, Pose pose, bool& border_ok) {
+static std::vector<uint16_t> Screen(Expression expression, Pose pose, bool& fits) {
     std::vector<uint16_t> face(kFaceW * kFaceH), screen(kScreenW * kScreenW, kBackground);
     RenderFace(expression, pose, face.data());
     for (int y = 0; y < kFaceH; ++y)
         for (int x = 0; x < kFaceW; ++x) {
-            bool border = y < kPadY || y >= kFaceH - kPadY || x < kPadX || x >= kFaceW - kPadX;
-            if (border && face[y * kFaceW + x] != kBackground) border_ok = false;
-            screen[(kFaceY + y) * kScreenW + kFaceX + x] = face[y * kFaceW + x];
+            // Room to look: the drawing shifts up to kLookX px sideways and kLookUp px up.
+            if ((y < kLookUp || x < kLookX || x >= kFaceW - kLookX) && face[y * kFaceW + x] != kBackground) fits = false;
+            screen[y * kScreenW + x] = face[y * kFaceW + x];
         }
     return screen;
 }
@@ -59,9 +59,9 @@ int main(int argc, char** argv) {
     constexpr int kCols = 6, kRowsOut = (kExpressions + kCols - 1) / kCols;
     std::vector<uint16_t> sheet(kCols * kScreenW * kRowsOut * kFaceBottom, kBackground);
     for (int e = 0; e < kExpressions; ++e) {
-        bool border_ok = true;
-        auto screen = Screen(static_cast<Expression>(e), kOpen, border_ok);
-        if (!border_ok) { fprintf(stderr, "%s reaches the sprite border: moving eyes would leave trails\n", kNames[e]); ok = false; }
+        bool fits = true;
+        auto screen = Screen(static_cast<Expression>(e), kOpen, fits);
+        if (!fits) { fprintf(stderr, "%s is clipped when the eyes look that way\n", kNames[e]); ok = false; }
         char name[64]; snprintf(name, sizeof(name), "/%02d-%s.png", e + 1, kNames[e]);
         ok &= WritePng(dir + name, screen, kScreenW, kScreenW);
         for (int y = 0; y < kFaceBottom; ++y)
@@ -72,9 +72,9 @@ int main(int argc, char** argv) {
     // Neutral's blink, left to right: open, half, thin, closed.
     std::vector<uint16_t> blink(kPoses * kScreenW * kFaceBottom);
     for (int p = 0; p < kPoses; ++p) {
-        bool border_ok = true;
-        auto screen = Screen(Expression::Neutral, static_cast<Pose>(p), border_ok);
-        ok &= border_ok;
+        bool fits = true;
+        auto screen = Screen(Expression::Neutral, static_cast<Pose>(p), fits);
+        ok &= fits;
         for (int y = 0; y < kFaceBottom; ++y)
             for (int x = 0; x < kScreenW; ++x) blink[y * kPoses * kScreenW + p * kScreenW + x] = screen[y * kScreenW + x];
     }
