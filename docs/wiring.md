@@ -53,8 +53,13 @@ STRAP_JTAG_SEL eFuse is burned, which it is not by default, so a button is safe.
  │ BCLK ├──────────────────────── D6  / GPIO43  (same net as mic SCK)
  │ LRC  ├──────────────────────── D7  / GPIO44  (same net as mic WS)
  │ DIN  ├──────────────────────── D0  / GPIO1   (speaker data)
- │ GAIN ├── open                 (9 dB)
- │ SD   ├── open                 (on, L+R mix)
+ │ GAIN ├── open                 (9 dB; floating is a real default per the datasheet)
+ │ SD   ├──────────────────────── 3V3  (datasheet Table 5 has no floating state for
+ │      │                              SD_MODE, only High/pullup/pullup/Low - leaving
+ │      │                              it open drifts on breadboard noise from the
+ │      │                              adjacent BCLK line. Tying to 3V3 = Left channel,
+ │      │                              which sounds identical to L+R mix here since the
+ │      │                              firmware duplicates the same sample into both.)
  │ GND  ├──────────────────────── GND
  │ VIN  ├──────────────────────── 5V rail after switch (see below)
  │ OUT+ ├──────── speaker +

@@ -123,10 +123,11 @@ struct AudioFormat {
     int rate;
     i2s_data_bit_width_t bits;
     i2s_slot_mode_t slots;
+    i2s_clock_src_t clk;
     const char* name;
 };
 static constexpr AudioFormat kDefaultFormat{kRate, I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO,
-                                            "16 kHz 32-bit stereo"};
+                                            I2S_CLK_SRC_DEFAULT, "16 kHz 32-bit stereo"};
 static AudioFormat format = kDefaultFormat;
 
 static void CloseAudio() {
@@ -140,11 +141,12 @@ static bool InitAudio(const AudioFormat& fmt = kDefaultFormat, bool with_mic = t
     chan.dma_desc_num = kDmaDescs;  // 8 x 240 frames: 120 ms at 16 kHz, same as the firmware
     if (i2s_new_channel(&chan, &tx, with_mic ? &rx : nullptr) != ESP_OK) return false;
     i2s_std_config_t std = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(static_cast<uint32_t>(fmt.rate)),
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(static_cast<uint32_t>(fmt.rate)),  // .clk_src set below
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(fmt.bits, fmt.slots),
         .gpio_cfg = {.mclk = GPIO_NUM_NC, .bclk = GPIO_NUM_43, .ws = GPIO_NUM_44, .dout = GPIO_NUM_1,
                      .din = with_mic ? GPIO_NUM_8 : GPIO_NUM_NC, .invert_flags = {}},
     };
+    std.clk_cfg.clk_src = fmt.clk;
     if (i2s_channel_init_std_mode(tx, &std) != ESP_OK || i2s_channel_enable(tx) != ESP_OK) return false;
     if (with_mic && (i2s_channel_init_std_mode(rx, &std) != ESP_OK || i2s_channel_enable(rx) != ESP_OK)) return false;
     // What the clock tree actually produced, not what we asked for. The MAX98357A needs 32, 48 or 64
@@ -235,21 +237,45 @@ static void MicTask(void*) {
 
 // ---------- Audio-only diagnostic ----------
 // Press BOOT in the first seconds after reset to get here: no display, no camera, no battery, no
-// microphone, no extra task - just app_main writing a 440 Hz sine into I2S. If the tone is still not
-// clean here, nothing in the rest of the firmware is to blame. Each further BOOT press steps to the
-// next format; clean in one format and scratchy in another means the amplifier cannot lock onto that
-// format, which is not a wiring fault.
+// microphone - just this loop writing into I2S. If the tone is not clean here, nothing in the rest
+// of the firmware is to blame.
+//
+// It alternates digital silence and a 440 Hz sine, both actually written to the DMA. That is the
+// test that splits the problem in two, and it is the one to listen to first:
+//   noise during SILENCE  -> the samples are provably all zeros, so it is clocking, wiring or the
+//                            amplifier. No amount of software can be at fault.
+//   clean SILENCE, bad tone -> it is the samples, the format or the pacing, all of it software.
+// Each BOOT press steps to the next format. The last entry runs the bus off the crystal instead of
+// the PLL: 16 kHz needs a fractional divider, and the two clock sources jitter differently.
 static constexpr AudioFormat kFormats[] = {
-    {16000, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO, "16 kHz 16-bit stereo"},
-    {16000, I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO, "16 kHz 32-bit stereo (app default)"},
-    {16000, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO, "16 kHz 16-bit mono"},
-    {44100, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO, "44.1 kHz 16-bit stereo"},
-    {48000, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO, "48 kHz 16-bit stereo"},
+    {16000, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO, I2S_CLK_SRC_DEFAULT, "16 kHz 16-bit stereo"},
+    {16000, I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO, I2S_CLK_SRC_DEFAULT, "16 kHz 32-bit stereo (app default)"},
+    {16000, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO, I2S_CLK_SRC_DEFAULT, "16 kHz 16-bit mono"},
+    {44100, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO, I2S_CLK_SRC_DEFAULT, "44.1 kHz 16-bit stereo"},
+    {48000, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO, I2S_CLK_SRC_DEFAULT, "48 kHz 16-bit stereo"},
+    {48000, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO, I2S_CLK_SRC_XTAL, "48 kHz 16-bit stereo, XTAL clock"},
 };
-static constexpr int kDiagnosticWindowMs = 3000;
+static constexpr int kDiagnosticWindowMs = 3000, kDiagnosticPhaseMs = 4000;
+static std::atomic<bool> diagSilent{true};
+
+// Reporting lives in its own task, below the writer. A log line over USB-CDC can block for longer
+// than the DMA holds, and then the report is itself the scratch it was meant to measure.
+static void DiagnosticReporter(void*) {
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        ESP_LOGI(TAG, "%s | %s | %lu writes, %lu short, %lu errors | worst gap %lu us (DMA holds %d) | heap %u min %u",
+                 format.name, diagSilent ? "SILENCE" : "440 Hz", txWrites.load(), txShort.load(), txErrors.load(),
+                 txWorstUs.exchange(0), kDmaDescs * kDmaFrames * 1000000 / format.rate,
+                 static_cast<unsigned>(esp_get_free_heap_size()), static_cast<unsigned>(esp_get_minimum_free_heap_size()));
+    }
+}
 static void AudioOnlyDiagnostic() {
     ESP_LOGW(TAG, "AUDIO-ONLY DIAGNOSTIC: display, camera, battery and microphone are all off.");
-    ESP_LOGW(TAG, "440 Hz at 10%% of full scale. Press BOOT to step to the next I2S format.");
+    ESP_LOGW(TAG, "%d s of digital silence, then %d s of 440 Hz, over and over.", kDiagnosticPhaseMs / 1000, kDiagnosticPhaseMs / 1000);
+    ESP_LOGW(TAG, "Noise during SILENCE cannot come from the samples: it is clocks, wiring or the amp.");
+    ESP_LOGW(TAG, "Press BOOT to step to the next I2S format.");
+    vTaskPrioritySet(nullptr, 6);  // app_main runs at 1, where almost anything can preempt the writer
+    xTaskCreate(DiagnosticReporter, "diag-log", 4096, nullptr, 1, nullptr);
     static uint8_t buffer[kFrames * 2 * sizeof(int32_t)];
     for (size_t i = 0;; i = (i + 1) % std::size(kFormats)) {
         const AudioFormat& fmt = kFormats[i];
@@ -258,26 +284,21 @@ static void AudioOnlyDiagnostic() {
             CloseAudio(); vTaskDelay(pdMS_TO_TICKS(2000)); continue;
         }
         txWrites = txShort = txErrors = txWorstUs = 0;
+        diagSilent = true;
         float phase = 0;
-        int64_t next_report = 0, loop_started = esp_timer_get_time();
+        int64_t loop_started = esp_timer_get_time(), next_phase = loop_started + kDiagnosticPhaseMs * 1000;
         bool was_pressed = true;  // still held from the press that got us here, or the last step
-        for (;;) {
-            const size_t bytes = FillTone(buffer, kFrames, fmt, 0.1f, kToneHz, phase);
+        for (;;) {  // nothing in this loop may block: fill, write, check the button, and that is all
+            const size_t bytes = FillTone(buffer, kFrames, fmt, diagSilent ? 0.0f : 0.1f, kToneHz, phase);
             WriteTone(buffer, bytes);
             const int64_t now = esp_timer_get_time();
-            if (static_cast<uint32_t>(now - loop_started) > txWorstUs.load()) txWorstUs = static_cast<uint32_t>(now - loop_started);
+            const uint32_t took = static_cast<uint32_t>(now - loop_started);
             loop_started = now;
+            if (took > txWorstUs.load()) txWorstUs = took;  // racy against the reporter's reset, and harmless
+            if (now > next_phase) { diagSilent = !diagSilent; next_phase = now + kDiagnosticPhaseMs * 1000; }
             const bool pressed = gpio_get_level(GPIO_NUM_0) == 0;
             if (pressed && !was_pressed) break;
             was_pressed = pressed;
-            if (now > next_report) {  // the write blocks ~16 ms, so this costs nothing in the gaps
-                next_report = now + 2000000;
-                ESP_LOGI(TAG, "%s: %lu writes, %lu short, %lu errors, worst gap %lu us (DMA holds %d), heap %u min %u, stack %u",
-                         fmt.name, txWrites.load(), txShort.load(), txErrors.load(), txWorstUs.load(),
-                         kDmaDescs * kDmaFrames * 1000000 / fmt.rate,
-                         static_cast<unsigned>(esp_get_free_heap_size()), static_cast<unsigned>(esp_get_minimum_free_heap_size()),
-                         static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
-            }
         }
         CloseAudio();
     }
@@ -402,6 +423,7 @@ extern "C" void app_main() {
         bool pressed = gpio_get_level(GPIO_NUM_0) == 0;
         if (pressed && !wasPressed) {
             tone_level = (tone_level + 1) % kToneModes;
+            txWrites = txShort = txErrors = txWorstUs = 0;  // the counters describe the level being heard
             ESP_LOGI(TAG, "BOOT pressed: tone level %d (%.0f%% of full scale)", tone_level.load(), kToneLevels[tone_level] * 100);
         }
         wasPressed = pressed;
@@ -430,11 +452,15 @@ extern "C" void app_main() {
             row(1, kGreen, std::clamp((db + 90) * 2, 1, 120));  // -90..-30 dBFS
         }
 
+        // The longest a single write took. Past the DMA depth means the speaker ran dry, and that
+        // gap is the scratch - a scratch with a clean gap here is analogue, not software.
+        const unsigned gap_ms = txWorstUs.load() / 1000, dma_ms = kDmaDescs * kDmaFrames * 1000 / kRate;
+        const bool starved = gap_ms > dma_ms || txShort || txErrors;
         if (!audio) snprintf(buf, sizeof(buf), "SPEAKER I2S FAIL");
         else if (tone_level == 0) snprintf(buf, sizeof(buf), "SPEAKER BOOT=TONE");
-        else if (tone_level == kMicOffLevel) snprintf(buf, sizeof(buf), "TONE 4: MIC OFF");
-        else snprintf(buf, sizeof(buf), "TONE %d: %.0f%%", tone_level.load(), kToneLevels[tone_level] * 100);
-        row(2, !audio ? kRed : tone_level > 0 ? kYellow : kWhite);
+        else snprintf(buf, sizeof(buf), "T%d %.0f%%%s %s%u", tone_level.load(), kToneLevels[tone_level] * 100,
+                      tone_level == kMicOffLevel ? " NOMIC" : "", starved ? "GAP" : "ok ", gap_ms);
+        row(2, !audio ? kRed : starved ? kRed : tone_level > 0 ? kYellow : kWhite);
 
         if (tick % 10 == 0) {
             float spread = 0, v = battery ? BatteryVolts(spread) : 0;
@@ -449,7 +475,7 @@ extern "C" void app_main() {
             // and that gap is the scratch.
             if (audio)
                 ESP_LOGI(TAG, "i2s %lu writes, %lu short, %lu errors, worst gap %lu us, heap %u min %u, stack spk %u mic %u",
-                         txWrites.load(), txShort.load(), txErrors.load(), txWorstUs.exchange(0),
+                         txWrites.load(), txShort.load(), txErrors.load(), txWorstUs.load(),
                          static_cast<unsigned>(esp_get_free_heap_size()), static_cast<unsigned>(esp_get_minimum_free_heap_size()),
                          static_cast<unsigned>(uxTaskGetStackHighWaterMark(speakerTask)), static_cast<unsigned>(uxTaskGetStackHighWaterMark(micTask)));
         }
