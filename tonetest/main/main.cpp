@@ -2,9 +2,12 @@
 // and nothing else - no display, no camera, no microphone, no PSRAM, no Wi-Fi, and no second task
 // except the one that prints. If the tone is not clean here, no amount of firmware work will fix it.
 //
-// Sweeps 100-8000 Hz continuously, up and back down, so a few bad frequencies stand out against
+// Sweeps 100-3000 Hz continuously, up and back down, so a few bad frequencies stand out against
 // a clean sweep. Ground D2 / GPIO3 to mute, leave it open to play.
-// NOT D6: that is GPIO43, the I2S bit clock (docs/wiring.md), and grounding it stops the whole bus.
+// BCLK is on D1/GPIO2 here (see below) - D6/GPIO43 tested faulty as an I2S clock and is left
+// disconnected. This build also toggles D6/GPIO43 slowly as a plain GPIO, independent of the audio
+// path, to check whether that pin can still drive a clean, slow signal (e.g. a reset line) even
+// though it cannot hold up as a fast I2S clock. Put a multimeter (DC volts) on D6 vs GND.
 //
 //   cd tonetest && idf.py -p <port> flash monitor
 #include <atomic>
@@ -21,21 +24,43 @@ static const char* TAG = "tonetest";
 
 // The only knobs. 16-bit stereo at 44.1 kHz gives 32 BCLK per frame, the ratio a MAX98357A is
 // least fussy about, and avoids the fractional clock divider that 16 kHz needs on the ESP32-S3.
-static constexpr int kRate = 44100, kBits = 16;  // try 16000, and 32, to compare
+// TEMP: BCLK dropped from 1.41 MHz to 256 kHz (5.5x) to test whether the amp is more tolerant of a
+// slower, gentler clock edge over the same wiring - a ringing/signal-integrity test, not a format fix.
+static constexpr int kRate = 8000, kBits = 16;
 static constexpr auto kSlotBits = kBits == 16 ? I2S_DATA_BIT_WIDTH_16BIT : I2S_DATA_BIT_WIDTH_32BIT;
 // A continuous triangle sweep, low to high and back, at a fixed moderate level: one long listen
 // finds resonances or clock-division artefacts at specific frequencies, which a single 440 Hz tone
 // cannot show. Log the Hz alongside what you hear to pin down where it happens.
-static constexpr float kFreqLow = 100, kFreqHigh = 8000, kAmplitude = 0.9f;  // as loud as the digital signal goes
+static constexpr float kFreqLow = 100, kFreqHigh = 3000, kAmplitude = 0.9f;  // capped under 4 kHz Nyquist
 static constexpr int kSweepMs = 8000;  // one direction; 16 s for a full up-down cycle
-static constexpr gpio_num_t kBclk = GPIO_NUM_43, kWs = GPIO_NUM_44, kDout = GPIO_NUM_1;  // D6, D7, D0
+// TEMP: BCLK moved off D6/GPIO43 onto D1/GPIO2 - an otherwise-unused pin - to test whether GPIO43
+// itself (or its routing on this board) is the fault. Move ONLY the physical BCLK wire to D1;
+// leave WS on D7 and DIN on D0 untouched.
+static constexpr gpio_num_t kBclk = GPIO_NUM_2, kWs = GPIO_NUM_44, kDout = GPIO_NUM_1;  // D1, D7, D0
 static constexpr gpio_num_t kMute = GPIO_NUM_3;  // D2, to GND
 static constexpr int kFrames = 256, kDmaDescs = 8, kDmaFrames = 240;
 
+static constexpr gpio_num_t kGpio43Test = GPIO_NUM_43;  // D6 - suspect pin, driven independently
 static i2s_chan_handle_t tx;
 static std::atomic<uint32_t> writes{0}, shorts{0}, errors{0}, worstUs{0};
 static std::atomic<float> currentHz{kFreqLow};
 static std::atomic<bool> muted{false};
+
+// Toggles D6/GPIO43 at 1 Hz as a plain output, nothing to do with I2S or the audio path. Answers
+// one question: can this pin still drive a clean, slow digital level (what a reset line needs),
+// even though it cannot hold up as a multi-hundred-kHz I2S clock. Watch D6 vs GND on a multimeter
+// (DC volts) - it should read close to 0V and close to 3.3V, in sync with the log below.
+static void Gpio43CheckTask(void*) {
+    gpio_config_t cfg = {.pin_bit_mask = 1ULL << kGpio43Test, .mode = GPIO_MODE_OUTPUT,
+                         .pull_up_en = GPIO_PULLUP_DISABLE, .pull_down_en = GPIO_PULLDOWN_DISABLE,
+                         .intr_type = GPIO_INTR_DISABLE};
+    gpio_config(&cfg);
+    for (bool level = false;; level = !level) {
+        gpio_set_level(kGpio43Test, level);
+        ESP_LOGI(TAG, "D6/GPIO43 (unrelated to audio): driving %s", level ? "HIGH (~3.3V)" : "LOW (~0V)");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
 
 // Printing lives out here, never in the write loop: a log line over USB-CDC can block for longer
 // than the DMA holds, and then the report is itself the gap it was meant to measure.
@@ -79,6 +104,7 @@ extern "C" void app_main() {
              kSweepMs / 1000, kSweepMs / 1000);
     ESP_LOGI(TAG, "Ground D2/GPIO3 to mute. Leave D6 alone: it is the bit clock.");
     xTaskCreate(Reporter, "report", 4096, nullptr, 1, nullptr);
+    xTaskCreate(Gpio43CheckTask, "d6-check", 2048, nullptr, 1, nullptr);
     vTaskPrioritySet(nullptr, 6);  // app_main sits at 1, where almost anything can preempt the writer
 
     // Muting writes zeros rather than stopping, so the DMA stays fed and the amplifier stays locked.

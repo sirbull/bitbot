@@ -10,9 +10,6 @@
 #include <driver/gpio.h>
 #include <driver/i2s_std.h>
 #include <driver/spi_master.h>
-#include <esp_adc/adc_cali.h>
-#include <esp_adc/adc_cali_scheme.h>
-#include <esp_adc/adc_oneshot.h>
 #include <esp_camera.h>
 #include <esp_heap_caps.h>
 #include <esp_lcd_panel_io.h>
@@ -33,7 +30,6 @@ static const char* TAG = "hwtest";
 // Calibration knobs. Same defaults as firmware/main/Kconfig.projbuild.
 static constexpr bool kInvert = true;
 static constexpr int kYGap = 0;
-static constexpr float kDividerRatio = 2.0f;  // 100k/100k; tune against a multimeter.
 
 static constexpr int W = 240, H = 240, kRows = 16;
 static constexpr uint16_t kBg = 0x0862, kOrange = 0xfc83, kGreen = 0x07e0, kRed = 0xf800,
@@ -143,7 +139,9 @@ static bool InitAudio(const AudioFormat& fmt = kDefaultFormat, bool with_mic = t
     i2s_std_config_t std = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(static_cast<uint32_t>(fmt.rate)),  // .clk_src set below
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(fmt.bits, fmt.slots),
-        .gpio_cfg = {.mclk = GPIO_NUM_NC, .bclk = GPIO_NUM_43, .ws = GPIO_NUM_44, .dout = GPIO_NUM_1,
+        // BCLK on D5/GPIO6, not schematic D6/GPIO43: GPIO43 is faulty on this board (tonetest/ proved
+        // it by moving BCLK alone to a spare pin). GPIO6 was already unused (no battery sensing).
+        .gpio_cfg = {.mclk = GPIO_NUM_NC, .bclk = GPIO_NUM_6, .ws = GPIO_NUM_44, .dout = GPIO_NUM_1,
                      .din = with_mic ? GPIO_NUM_8 : GPIO_NUM_NC, .invert_flags = {}},
     };
     std.clk_cfg.clk_src = fmt.clk;
@@ -304,32 +302,6 @@ static void AudioOnlyDiagnostic() {
     }
 }
 
-// ---------- Battery divider on GPIO6 / ADC1 ch5 ----------
-static adc_oneshot_unit_handle_t adc;
-static adc_cali_handle_t cali;
-static bool InitBattery() {
-    adc_oneshot_unit_init_cfg_t unit = {.unit_id = ADC_UNIT_1, .clk_src = {}, .ulp_mode = ADC_ULP_MODE_DISABLE};
-    adc_oneshot_chan_cfg_t ch = {.atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_DEFAULT};
-    adc_cali_curve_fitting_config_t cc = {.unit_id = ADC_UNIT_1, .chan = ADC_CHANNEL_5, .atten = ADC_ATTEN_DB_12,
-                                          .bitwidth = ADC_BITWIDTH_DEFAULT};
-    return adc_oneshot_new_unit(&unit, &adc) == ESP_OK && adc_oneshot_config_channel(adc, ADC_CHANNEL_5, &ch) == ESP_OK &&
-           adc_cali_create_scheme_curve_fitting(&cc, &cali) == ESP_OK;
-}
-// Returns volts; spread = max-min over the burst. A floating pin (divider not
-// wired) wanders by volts, a real divider with its 100 nF cap stays within ~50 mV.
-static float BatteryVolts(float& spread) {
-    int sum = 0, lo = 99999, hi = 0;
-    for (int i = 0; i < 16; ++i) {
-        int raw = 0, mv = 0;
-        adc_oneshot_read(adc, ADC_CHANNEL_5, &raw);
-        adc_cali_raw_to_voltage(cali, raw, &mv);
-        sum += mv; lo = std::min(lo, mv); hi = std::max(hi, mv);
-        vTaskDelay(1);
-    }
-    spread = (hi - lo) / 1000.0f * kDividerRatio;
-    return sum / 16 / 1000.0f * kDividerRatio;
-}
-
 // ---------- Camera (XIAO Sense connector) ----------
 static const char* InitCamera() {
     camera_config_t c = {};
@@ -401,7 +373,6 @@ extern "C" void app_main() {
         xTaskCreatePinnedToCore(MicTask, "mic", 4096, nullptr, 5, &micTask, 1);
         beep = true;  // startup pip
     }
-    bool battery = InitBattery();
     const char* camera = InitCamera();
     ESP_LOGI(TAG, "camera %s", camera ? camera : "not found");
 
@@ -463,14 +434,9 @@ extern "C" void app_main() {
         row(2, !audio ? kRed : starved ? kRed : tone_level > 0 ? kYellow : kWhite);
 
         if (tick % 10 == 0) {
-            float spread = 0, v = battery ? BatteryVolts(spread) : 0;
-            bool floating = spread > 0.3f;
-            bool ok = battery && !floating && v > 3.0f && v < 4.35f;
-            if (!battery) snprintf(buf, sizeof(buf), "BATT ADC FAIL");
-            else if (floating) snprintf(buf, sizeof(buf), "BATT FLOATING %.1fV", v);
-            else snprintf(buf, sizeof(buf), ok ? "BATT %.2fV" : "BATT %.2fV ?", v);
-            row(3, ok ? kGreen : kRed);
-            ESP_LOGI(TAG, "tone %d batt %.2fV spread %.2f mic %s (%s) %ddB fps %.1f", tone_level.load(), v, spread, micAlive ? "ok" : "none", micSlot ? "R" : "L", micDb.load(), fps);
+            // Battery sensing was removed: GPIO6/D5 now carries BCLK (GPIO43/D6 proved faulty on
+            // this board - see tonetest/), so there is no spare ADC pin for it any more.
+            ESP_LOGI(TAG, "tone %d mic %s (%s) %ddB fps %.1f", tone_level.load(), micAlive ? "ok" : "none", micSlot ? "R" : "L", micDb.load(), fps);
             // Speaker health. A worst gap past the DMA depth (120000 us here) means it ran dry,
             // and that gap is the scratch.
             if (audio)

@@ -23,10 +23,14 @@ bool InitAudio() {
     chan.dma_desc_num = 8; chan.dma_frame_num = 240;  // 120 ms of DMA buffer: room for network jitter
     if (i2s_new_channel(&chan, &tx, &rx) != ESP_OK) return false;
     // Stereo 32-bit slots: the mic answers in the left slot (L/R to GND), the amp mixes L+R.
+    // BCLK is on D5/GPIO6, not the D6/GPIO43 the schematic originally called for: GPIO43 proved
+    // physically faulty on the prototype board (see tonetest/), confirmed by moving BCLK alone to
+    // a spare pin and getting a clean signal. GPIO6 was already unused (battery sensing was never
+    // wired). WS/DIN/mic-SD are unaffected.
     i2s_std_config_t std = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(kAudioRate),
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO),
-        .gpio_cfg = {.mclk = GPIO_NUM_NC, .bclk = GPIO_NUM_43, .ws = GPIO_NUM_44, .dout = GPIO_NUM_1, .din = GPIO_NUM_8,
+        .gpio_cfg = {.mclk = GPIO_NUM_NC, .bclk = GPIO_NUM_6, .ws = GPIO_NUM_44, .dout = GPIO_NUM_1, .din = GPIO_NUM_8,
                      .invert_flags = {}},
     };
     bool ok = i2s_channel_init_std_mode(tx, &std) == ESP_OK && i2s_channel_init_std_mode(rx, &std) == ESP_OK &&
