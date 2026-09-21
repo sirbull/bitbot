@@ -46,7 +46,7 @@ its strapping role only applies with the STRAP_JTAG_SEL eFuse burned. Do not cut
 | TFT CS | D3 / 4 | Verified | |
 | TFT RST | D1 / 2 | Driver allocation | Active-low reset; validate on module |
 | TFT backlight (BL) | 3V3 | Verified | Always on; GPIO dimming would need a transistor |
-| INMP441 + amplifier BCLK | D5 / 6 | Verified, moved | D6/GPIO43 cannot hold a fast I2S clock on this board (found via tonetest/); moved to the pin freed by dropping battery sensing. D6/GPIO43 itself still works fine as slow GPIO (1 Hz toggle, clean 0/3.3V) - spare pin for something like a reset line, just not another fast clock |
+| INMP441 + amplifier BCLK | D5 / 6 | Verified, moved | D6/GPIO43 cannot hold a fast I2S clock on this board (found by isolating I2S on a bare transmitter and swapping pins); moved to the pin freed by dropping battery sensing. D6/GPIO43 itself still works fine as slow GPIO (1 Hz toggle, clean 0/3.3V) - spare pin for something like a reset line, just not another fast clock |
 | INMP441 + amplifier WS | D7 / 44 | TBD | Shared standard I2S frame clock; UART0 RX unavailable |
 | INMP441 SD → ESP RX | D9 / 8 | TBD | SD card absent; 3.3 V mic supply |
 | ESP TX → MAX98357A DIN | D0 / 1 | TBD | Separate from microphone data |

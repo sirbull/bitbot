@@ -28,7 +28,6 @@ Trykker du BOOT innen 3 sekunder etter reset, starter i stedet en ren lyddiagnos
 skjerm, kamera, batteri og mikrofon blir aldri initialisert, og programmet veksler
 mellom fire sekunder digital stillhet og fire sekunder 440 Hz. Støy under stillheten
 kan ikke komme fra samplene. Videre BOOT-trykk stepper gjennom seks I2S-formater.
-Trenger du enda mindre, ligger [tonetest/](../tonetest/) ved siden av.
 
 Uten kamera viser nederste halvdel tre felt som skal være rød, grønn, blå.
 Kalibrering (invertering, radforskyvning) står øverst i

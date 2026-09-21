@@ -52,7 +52,7 @@ static constexpr float kWakeThreshold = 0.2f;  // ponytail: esp-sr default; lowe
 
 enum class Voice { Off, Idle, Connecting, Listening, Speaking };
 static std::atomic<Voice> voice{Voice::Off};
-static std::atomic<bool> wake_heard{false}, button_pressed{false}, tts_done{false};
+static std::atomic<bool> wake_heard{false}, button_pressed{false}, tts_done{false}, sleep_requested{false};
 static std::atomic<int> pending_audio{0};
 static std::atomic<int64_t> last_activity{0}, last_received{0};  // last sign of life from the server
 static std::atomic<int> sent_frames{0}, received_frames{0}, mic_peak{0}, played_samples{0}, decode_errors{0}, underruns{0};  // for the once-a-second log line
@@ -66,7 +66,7 @@ static constexpr EventBits_t kWsConnected = 1, kWsHello = 2, kWsClosed = 4;
 struct Packet { uint8_t* data; size_t size; };
 static QueueHandle_t playback;  // Opus packets from the server, freed by the speaker task
 
-struct Prefs { int volume = 70, idle_s = 30; bool captions = true; };
+struct Prefs { int volume = 20, idle_s = 30; bool captions = true; };  // matches config/settings-schema.json
 static Prefs ReadPrefs() {
     std::lock_guard<std::mutex> lock(shared.mutex);
     const auto* s = cJSON_GetObjectItemCaseSensitive(shared.document, "settings");
@@ -156,6 +156,17 @@ static void McpError(double id, const char* message) {
     cJSON_AddStringToObject(error, "message", message);
     SendMcp(payload);
 }
+static void McpText(double id, const std::string& text) {
+    auto* payload = McpResult(id);
+    auto* result = cJSON_AddObjectToObject(payload, "result");
+    auto* content = cJSON_AddArrayToObject(result, "content");
+    auto* item = cJSON_CreateObject();
+    cJSON_AddStringToObject(item, "type", "text");
+    cJSON_AddStringToObject(item, "text", text.c_str());
+    cJSON_AddItemToArray(content, item);
+    cJSON_AddBoolToObject(result, "isError", false);
+    SendMcp(payload);
+}
 // Taking and uploading a photo takes seconds, so it runs in its own task.
 struct PhotoRequest { double id; std::string question; };
 static void PhotoTask(void* argument) {
@@ -164,17 +175,7 @@ static void PhotoTask(void* argument) {
     { std::lock_guard<std::mutex> lock(ws_mutex); url = vision_url; token = vision_token; }
     const std::string answer = CameraExplain(url, token, request->question);
     if (answer.empty()) McpError(request->id, "The camera could not take or upload a photo");
-    else {
-        auto* payload = McpResult(request->id);
-        auto* result = cJSON_AddObjectToObject(payload, "result");
-        auto* content = cJSON_AddArrayToObject(result, "content");
-        auto* item = cJSON_CreateObject();
-        cJSON_AddStringToObject(item, "type", "text");
-        cJSON_AddStringToObject(item, "text", answer.c_str());
-        cJSON_AddItemToArray(content, item);
-        cJSON_AddBoolToObject(result, "isError", false);
-        SendMcp(payload);
-    }
+    else McpText(request->id, answer);
     vTaskDelete(nullptr);
 }
 static void OnMcp(const cJSON* payload) {
@@ -217,14 +218,84 @@ static void OnMcp(const cJSON* payload) {
             cJSON_AddItemToArray(required, cJSON_CreateString("question"));
             cJSON_AddItemToArray(tools, tool);
         }
+        if (CameraReady()) {
+            auto* tool = cJSON_CreateObject();
+            cJSON_AddStringToObject(tool, "name", "self.camera.live_view");
+            cJSON_AddStringToObject(tool, "description",
+                                    "Show a live camera feed full-screen for about 20 seconds. Call this when the "
+                                    "user asks for live video, a live feed, or to watch through the camera "
+                                    "continuously, rather than a single photo. Takes no arguments.");
+            cJSON_AddStringToObject(cJSON_AddObjectToObject(tool, "inputSchema"), "type", "object");
+            cJSON_AddItemToArray(tools, tool);
+        }
+        if (CameraReady()) {
+            auto* tool = cJSON_CreateObject();
+            cJSON_AddStringToObject(tool, "name", "self.camera.stop_live_view");
+            cJSON_AddStringToObject(tool, "description",
+                                    "Stop a running live camera view early. Call this when the user asks to stop the "
+                                    "video, stop the live feed, or stop watching. Takes no arguments.");
+            cJSON_AddStringToObject(cJSON_AddObjectToObject(tool, "inputSchema"), "type", "object");
+            cJSON_AddItemToArray(tools, tool);
+        }
+        {
+            auto* tool = cJSON_CreateObject();
+            cJSON_AddStringToObject(tool, "name", "self.speaker.set_volume");
+            cJSON_AddStringToObject(tool, "description",
+                                    "Set your speaker volume. Call this when the user asks to change, raise, lower, "
+                                    "mute, or set a specific volume, e.g. \"set the volume to 20%\" or \"turn it up\"."
+                                    "\nArgs:\n  `percent`: 0-100.");
+            auto* schema = cJSON_AddObjectToObject(tool, "inputSchema");
+            cJSON_AddStringToObject(schema, "type", "object");
+            auto* percent = cJSON_AddObjectToObject(cJSON_AddObjectToObject(schema, "properties"), "percent");
+            cJSON_AddStringToObject(percent, "type", "integer");
+            cJSON_AddNumberToObject(percent, "minimum", 0); cJSON_AddNumberToObject(percent, "maximum", 100);
+            auto* required = cJSON_AddArrayToObject(schema, "required");
+            cJSON_AddItemToArray(required, cJSON_CreateString("percent"));
+            cJSON_AddItemToArray(tools, tool);
+        }
+        {
+            auto* tool = cJSON_CreateObject();
+            cJSON_AddStringToObject(tool, "name", "self.device.sleep");
+            cJSON_AddStringToObject(tool, "description",
+                                    "End this conversation and go back to passively waiting for the wake phrase. Call "
+                                    "this when the user says something like \"go to sleep\", \"gå i dvale\", "
+                                    "\"sov\"/\"sove\", \"stop listening\", or \"that's all, goodbye\". Takes no arguments.");
+            cJSON_AddStringToObject(cJSON_AddObjectToObject(tool, "inputSchema"), "type", "object");
+            cJSON_AddItemToArray(tools, tool);
+        }
         cJSON_AddStringToObject(result, "nextCursor", "");
         SendMcp(payload_out);
     } else if (method == "tools/call") {
         const auto* params = cJSON_GetObjectItemCaseSensitive(payload, "params");
-        if (strcmp(Text(params, "name"), "self.camera.take_photo") != 0) { McpError(id, "Unknown tool"); return; }
-        auto* request = new PhotoRequest{id, Text(cJSON_GetObjectItemCaseSensitive(params, "arguments"), "question")};
-        SetDisplayCaption("Looking ...");
-        if (xTaskCreate(PhotoTask, "photo", 8192, request, 4, nullptr) != pdPASS) { delete request; McpError(id, "Busy"); }
+        const std::string name = Text(params, "name");
+        const auto* args = cJSON_GetObjectItemCaseSensitive(params, "arguments");
+        if (name == "self.camera.take_photo") {
+            auto* request = new PhotoRequest{id, Text(args, "question")};
+            SetDisplayCaption("Looking ...");
+            if (xTaskCreate(PhotoTask, "photo", 8192, request, 4, nullptr) != pdPASS) { delete request; McpError(id, "Busy"); }
+        } else if (name == "self.camera.live_view") {
+            McpText(id, StartLiveView() ? "Showing you a live view for a bit." : "Already showing a live view.");
+        } else if (name == "self.camera.stop_live_view") {
+            McpText(id, StopLiveView() ? "Stopped the live view." : "No live view is running.");
+        } else if (name == "self.speaker.set_volume") {
+            const auto* requested = cJSON_GetObjectItemCaseSensitive(args, "percent");
+            if (!cJSON_IsNumber(requested)) { McpError(id, "percent must be a number 0-100"); return; }
+            const int percent = std::clamp(static_cast<int>(requested->valuedouble), 0, 100);
+            SetVolume(percent);
+            prefs.volume = percent;  // takes effect immediately, without waiting for the next session
+            Json patch(cJSON_CreateObject());
+            cJSON_AddNumberToObject(cJSON_AddObjectToObject(patch.value, "settings"), "volume", percent);
+            std::string error;
+            bool saved;
+            { std::lock_guard<std::mutex> lock(shared.mutex); saved = SaveSettings(patch.value, error); }
+            McpText(id, "Volume set to " + std::to_string(percent) + "%." +
+                            (saved ? "" : " (not saved for next time: " + error + ")"));
+        } else if (name == "self.device.sleep") {
+            sleep_requested = true;
+            McpText(id, "Going to sleep.");
+        } else {
+            McpError(id, "Unknown tool");
+        }
     }
 }
 static void OnJson(const std::string& text) {
@@ -358,7 +429,7 @@ static void VoiceTask(void*) {
         }
         if (now == Voice::Off) {
             if (available) { voice = Voice::Idle; ESP_LOGI(kTag, "Ready: say \"hey robot\" or press the button"); }
-            button_pressed = wake_heard = false;
+            button_pressed = wake_heard = sleep_requested = false;
             continue;
         }
         if (now == Voice::Idle) {
@@ -377,7 +448,13 @@ static void VoiceTask(void*) {
                      played_samples.exchange(0) * 1000 / kAudioRate, underruns.load(),
                      peak ? static_cast<int>(20 * log10f(peak / 32768.0f)) : -99);
         }
-        if (button_pressed.exchange(false)) { SendJson("abort", {{"reason", "user"}}); CloseSession("button"); continue; }
+        // Evaluate both unconditionally: exchange() has a side effect, so it must not be skipped by ||.
+        const bool stop_pressed = button_pressed.exchange(false), stop_asked = sleep_requested.exchange(false);
+        if (stop_pressed || stop_asked) {
+            SendJson("abort", {{"reason", "user"}});
+            CloseSession(stop_asked ? "asked to sleep" : "button");
+            continue;
+        }
         // Interrupting: the wake phrase during a reply stops the reply and listens again.
         if (now == Voice::Speaking && wake_heard.exchange(false)) {
             SendJson("abort", {{"reason", "wake_word_detected"}});

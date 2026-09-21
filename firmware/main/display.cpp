@@ -34,6 +34,8 @@ static std::mutex image_mutex;
 static uint16_t* image = nullptr;        // PSRAM copy of the last photo
 static int image_w = 0, image_h = 0;
 static int64_t image_until = 0;
+static bool image_fresh = false;    // not drawn yet: a picture is blitted once, not on every tick
+static bool image_cleared = false;  // borders around the current picture are already black
 static bool dim_drawn = false;
 
 // Idle dimming. There is no backlight pin, so this scales the pixels themselves; each RGB565
@@ -143,33 +145,40 @@ bool DisplayReady() { return ready.load(); }
 void SetDisplayImage(const uint16_t* source, int width, int height, int ms) {
     if (!ready.load() || width > kWidth || height > kHeight) return;
     std::lock_guard<std::mutex> lock(image_mutex);
-    uint16_t* copy = static_cast<uint16_t*>(heap_caps_malloc(width * height * 2, MALLOC_CAP_SPIRAM));
-    if (!copy) return;
-    std::copy_n(source, width * height, copy);
-    heap_caps_free(image);
-    image = copy; image_w = width; image_h = height; image_until = NowMs() + ms;
+    if (!image || image_w != width || image_h != height) {  // a live view keeps the same buffer
+        uint16_t* copy = static_cast<uint16_t*>(heap_caps_malloc(width * height * 2, MALLOC_CAP_SPIRAM));
+        if (!copy) return;
+        heap_caps_free(image);
+        image = copy; image_w = width; image_h = height;
+    }
+    std::copy_n(source, width * height, image);
+    image_until = NowMs() + ms; image_fresh = true;
+}
+void ClearDisplayImage() {
+    std::lock_guard<std::mutex> lock(image_mutex);
+    image_until = 0;
 }
 bool DisplayShowingImage() {
     std::lock_guard<std::mutex> lock(image_mutex);
     return image && NowMs() < image_until;
 }
-// Centred on the whole screen. A picture as tall as the screen covers the text area too.
+// Centred on the whole screen; the bars around a picture shorter than the screen are cleared once.
 static bool ShowImage() {
     std::lock_guard<std::mutex> lock(image_mutex);
     if (!image) return false;
+    if (!image_fresh) return true;
+    image_fresh = false;
     const int x = (kWidth - image_w) / 2, y = (kHeight - image_h) / 2;
-    static bool cleared = false;
-    if (!cleared) {  // only once per picture: clearing every frame would flicker a live view
+    if (!image_cleared) {  // clearing every frame would flicker a live view
         if (y > 0 && !Fill(0, 0, kWidth, y, kBackground)) return false;
         if (y + image_h < kHeight && !Fill(0, y + image_h, kWidth, kHeight - y - image_h, kBackground)) return false;
-        cleared = true;
+        image_cleared = true;
     }
     for (int row = 0; row < image_h; row += kRows) {
         int rows = std::min(kRows, image_h - row);
         std::copy_n(image + row * image_w, rows * image_w, pixels);
         if (!Blit(x, y + row, image_w, rows)) return false;
     }
-    if (NowMs() >= image_until) cleared = false;  // next picture starts with a clean border again
     return true;
 }
 // UTF-8 to font indices: ASCII plus æøåÆØÅ; anything else becomes '?'.
@@ -336,8 +345,13 @@ void TickDisplay(State) {
     { std::lock_guard<std::mutex> lock(image_mutex); showing_image = image && now < image_until; }
     if (showing_image) {
         showed_image = true;
-        ShowImage();  // a live view replaces this every frame; a still photo just redraws itself
+        ShowImage();
         return;
+    }
+    if (showed_image) {  // the picture covered the text rows as well as the face
+        image_cleared = false;
+        std::lock_guard<std::mutex> lock(text_mutex);
+        pages_changed = true;
     }
     bool dirty = blink_at < 0 || dim_drawn != dim.load() || showed_image;
     showed_image = false;

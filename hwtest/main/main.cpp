@@ -139,8 +139,8 @@ static bool InitAudio(const AudioFormat& fmt = kDefaultFormat, bool with_mic = t
     i2s_std_config_t std = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(static_cast<uint32_t>(fmt.rate)),  // .clk_src set below
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(fmt.bits, fmt.slots),
-        // BCLK on D5/GPIO6, not schematic D6/GPIO43: GPIO43 is faulty on this board (tonetest/ proved
-        // it by moving BCLK alone to a spare pin). GPIO6 was already unused (no battery sensing).
+        // BCLK on D5/GPIO6, not schematic D6/GPIO43: GPIO43 cannot hold a fast I2S clock on this
+        // board (proved by moving BCLK alone to a spare pin). GPIO6 was already unused (no battery sensing).
         .gpio_cfg = {.mclk = GPIO_NUM_NC, .bclk = GPIO_NUM_6, .ws = GPIO_NUM_44, .dout = GPIO_NUM_1,
                      .din = with_mic ? GPIO_NUM_8 : GPIO_NUM_NC, .invert_flags = {}},
     };
@@ -434,8 +434,8 @@ extern "C" void app_main() {
         row(2, !audio ? kRed : starved ? kRed : tone_level > 0 ? kYellow : kWhite);
 
         if (tick % 10 == 0) {
-            // Battery sensing was removed: GPIO6/D5 now carries BCLK (GPIO43/D6 proved faulty on
-            // this board - see tonetest/), so there is no spare ADC pin for it any more.
+            // Battery sensing was removed: GPIO6/D5 now carries BCLK (GPIO43/D6 cannot hold a fast
+            // I2S clock on this board), so there is no spare ADC pin for it any more.
             ESP_LOGI(TAG, "tone %d mic %s (%s) %ddB fps %.1f", tone_level.load(), micAlive ? "ok" : "none", micSlot ? "R" : "L", micDb.load(), fps);
             // Speaker health. A worst gap past the DMA depth (120000 us here) means it ran dry,
             // and that gap is the scratch.

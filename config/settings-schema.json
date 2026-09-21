@@ -13,7 +13,7 @@
     "voice": { "type": "string", "maxBytes": 80, "default": "" },
     "speed": { "type": "number", "min": 0.75, "max": 1.25, "default": 1 },
     "pitch": { "type": "number", "min": -6, "max": 6, "default": 0 },
-    "volume": { "type": "integer", "min": 0, "max": 100, "default": 50 },
+    "volume": { "type": "integer", "min": 0, "max": 100, "default": 20 },
     "brightness": { "type": "integer", "min": 10, "max": 100, "default": 70 },
     "idleSeconds": { "type": "integer", "min": 15, "max": 300, "default": 60 },
     "captions": { "type": "boolean", "default": true }

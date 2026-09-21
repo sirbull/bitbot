@@ -33,10 +33,6 @@
   16/44.1/48 kHz), which separates "the amplifier cannot lock onto this format"
   from "something is stalling the writer". `tools/tone_check.cpp` checks the
   waveform maths on a PC.
-- `tonetest/`: smaller still - one I2S transmitter, one 440 Hz sine, no display,
-  camera, microphone, PSRAM or Wi-Fi. D2/GPIO3 to GND mutes it by writing zeros,
-  which keeps the DMA fed, so noise while muted cannot be coming from the samples.
-  Not D6: that is GPIO43, the bit clock.
 - Research and hardware documentation, including the confirmed display pin list.
 
 ## Next work, in order

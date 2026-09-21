@@ -24,7 +24,7 @@ bool InitAudio() {
     if (i2s_new_channel(&chan, &tx, &rx) != ESP_OK) return false;
     // Stereo 32-bit slots: the mic answers in the left slot (L/R to GND), the amp mixes L+R.
     // BCLK is on D5/GPIO6, not the D6/GPIO43 the schematic originally called for: GPIO43 proved
-    // physically faulty on the prototype board (see tonetest/), confirmed by moving BCLK alone to
+    // physically faulty on the prototype board, confirmed by moving BCLK alone to
     // a spare pin and getting a clean signal. GPIO6 was already unused (battery sensing was never
     // wired). WS/DIN/mic-SD are unaffected.
     i2s_std_config_t std = {
