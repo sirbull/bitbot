@@ -20,6 +20,20 @@ menu "BitBot hardware bring-up"
         int "Display SPI clock in MHz (lower it if the image glitches)"
         range 10 80
         default 40
+    config BITBOT_DISPLAY_DIM_SECONDS
+        int "Dim the screen after this many idle seconds (0 disables dimming)"
+        range 0 3600
+        default 30
+        help
+            Idle means no conversation: the bot is only listening for "Hey
+            Robot". The wake phrase, the button and any status change undim it.
+    config BITBOT_DISPLAY_DIM_PERCENT
+        int "Screen brightness while dimmed, in percent"
+        range 0 100
+        default 20
+        help
+            BL is wired to 3V3, so this darkens the pixels, not the backlight.
+            The panel still glows at 0; only rewiring BL to a GPIO fixes that.
     config BITBOT_DISPLAY_EXPRESSION_DEMO
         bool "Cycle through all facial expressions every 4 s (for tuning)"
         default n

@@ -24,6 +24,15 @@
 - Camera: OV3660 identified on the Sense board; a photo is captured, shown on
   screen and uploaded to XiaoZhi's vision service only when the assistant asks.
 - `hwtest/`: a separate bring-up program that reports each part on the screen.
+  BOOT steps the speaker test tone through off / 2% / 10% / 40% / 40%-with-the-
+  mic-off. Pressing BOOT within 3 s of reset instead enters the audio-only
+  diagnostic: display, camera, battery and microphone all stay uninitialised and
+  `app_main` does nothing but write a 440 Hz sine into I2S, so a tone that is
+  still not clean there cannot be blamed on the rest of the firmware. Each
+  further BOOT press steps to the next I2S format (16/32-bit, mono/stereo,
+  16/44.1/48 kHz), which separates "the amplifier cannot lock onto this format"
+  from "something is stalling the writer". `tools/tone_check.cpp` checks the
+  waveform maths on a PC.
 - Research and hardware documentation, including the confirmed display pin list.
 
 ## Next work, in order

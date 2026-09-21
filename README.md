@@ -109,7 +109,10 @@ The display is enabled by default (**BitBot hardware bring-up → Enable verifie
 text below: setup instructions with the hotspot password, the XiaoZhi pairing
 code, and conversation captions. Colour inversion, RGB/BGR order, row offset and
 SPI clock are configurable. The backlight has no GPIO, so "sleep" dims the
-pixels instead.
+pixels instead: after 30 idle seconds (only listening for "Hey Robot") the
+whole screen drops to 20 % brightness, and any conversation restores it. Both
+numbers are in **BitBot hardware bring-up**; 0 seconds turns dimming off. The
+panel itself still glows, since BL sits on 3V3.
 
 ## Talking to it
 

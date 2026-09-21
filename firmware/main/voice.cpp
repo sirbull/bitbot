@@ -47,13 +47,14 @@ static const struct { const char* text; const char* phonemes; } kWakePhrases[] =
 // Wi-Fi stall a conversation survives, not a per-frame deadline. Blocking here drops some mic DMA;
 // losing a little audio beats losing the call.
 static constexpr int kSendTimeoutMs = 3000;
+static constexpr int kReplyTimeoutMs = 8000;  // silence from the server while "speaking" means it is over
 static constexpr float kWakeThreshold = 0.2f;  // ponytail: esp-sr default; lower made detection worse, not better
 
 enum class Voice { Off, Idle, Connecting, Listening, Speaking };
 static std::atomic<Voice> voice{Voice::Off};
 static std::atomic<bool> wake_heard{false}, button_pressed{false}, tts_done{false};
 static std::atomic<int> pending_audio{0};
-static std::atomic<int64_t> last_activity{0};
+static std::atomic<int64_t> last_activity{0}, last_received{0};  // last sign of life from the server
 static std::atomic<int> sent_frames{0}, received_frames{0}, mic_peak{0}, played_samples{0}, decode_errors{0}, underruns{0};  // for the once-a-second log line
 
 static std::mutex ws_mutex;  // guards ws and session_id between the voice, mic and WebSocket tasks
@@ -96,9 +97,34 @@ static void Caption(const std::string& text, bool is_caption = true) {
     SetDisplayCaption(text);
 }
 
-static bool SendText(const std::string& text) {
-    std::lock_guard<std::mutex> lock(ws_mutex);
-    return ws && esp_websocket_client_send_text(ws, text.data(), text.size(), pdMS_TO_TICKS(kSendTimeoutMs)) >= 0;
+// Everything we send goes out through one task. Sending Opus straight from the microphone task took
+// the client's internal lock every 60 ms, which starved the control messages and the receive path
+// ("Could not lock ws-client" in the log), so the server never saw "listen" and never answered.
+struct Outgoing { std::string* payload; bool binary; };
+static QueueHandle_t outbox;
+
+static bool Enqueue(std::string&& payload, bool binary) {
+    { std::lock_guard<std::mutex> lock(ws_mutex); if (!ws) return false; }
+    Outgoing message{new std::string(std::move(payload)), binary};
+    if (xQueueSend(outbox, &message, 0) == pdTRUE) return true;
+    delete message.payload;  // a full queue drops one audio frame rather than stalling the microphone
+    return false;
+}
+static bool SendText(const std::string& text) { return Enqueue(std::string(text), false); }
+static void SenderTask(void*) {
+    for (;;) {
+        Outgoing message;
+        if (xQueueReceive(outbox, &message, portMAX_DELAY) != pdTRUE) continue;
+        std::unique_ptr<std::string> payload(message.payload);
+        esp_websocket_client_handle_t client;
+        { std::lock_guard<std::mutex> lock(ws_mutex); client = ws; }
+        if (!client) continue;
+        if (message.binary) {
+            if (esp_websocket_client_send_bin(client, payload->data(), payload->size(), pdMS_TO_TICKS(kSendTimeoutMs)) > 0) ++sent_frames;
+        } else {
+            esp_websocket_client_send_text(client, payload->data(), payload->size(), pdMS_TO_TICKS(kSendTimeoutMs));
+        }
+    }
 }
 static void SendJson(const char* type, std::initializer_list<std::pair<const char*, const char*>> fields) {
     Json message(cJSON_CreateObject());
@@ -202,6 +228,7 @@ static void OnMcp(const cJSON* payload) {
     }
 }
 static void OnJson(const std::string& text) {
+    last_received = NowMs();
     Json message(cJSON_Parse(text.c_str()));
     const std::string type = Text(message.value, "type");
     if (type != "tts" || strcmp(Text(message.value, "state"), "sentence_start") != 0)
@@ -244,6 +271,7 @@ static void OnWebsocket(void*, esp_event_base_t, int32_t id, void* event) {
     if (opcode == 0x1) OnJson(frame);
     else if (voice == Voice::Speaking && frame.size() < 4096) {  // audio while listening is dropped
         ++received_frames;
+        last_received = NowMs();
         Packet packet{static_cast<uint8_t*>(malloc(frame.size())), frame.size()};
         if (!packet.data) return;
         memcpy(packet.data, frame.data(), frame.size());
@@ -260,6 +288,8 @@ static void CloseSession(const char* why) {
     if (old) { esp_websocket_client_close(old, pdMS_TO_TICKS(1000)); esp_websocket_client_destroy(old); }
     Packet packet;
     while (xQueueReceive(playback, &packet, 0) == pdTRUE) { free(packet.data); --pending_audio; }
+    Outgoing pending;
+    while (xQueueReceive(outbox, &pending, 0) == pdTRUE) delete pending.payload;
     SetExpression(Expression::Neutral);
     SetDisplayCaption("");
     voice = Voice::Idle;
@@ -305,7 +335,7 @@ static void OpenSession(const char* wake_phrase) {
     SendJson("listen", {{"state", "start"}, {"mode", "auto"}});  // server-side VAD decides when we stop talking
     SetExpression(Expression::Neutral);
     SetDisplayCaption(" ");  // blank: a clear screen means "go ahead, I am listening"
-    last_activity = NowMs();
+    last_activity = last_received = NowMs();
     voice = Voice::Listening;
     ESP_LOGI(kTag, "Listening (%s)", wake_phrase ? "wake phrase" : "button");
 }
@@ -318,13 +348,21 @@ static void VoiceTask(void*) {
         std::string url, token;
         const bool available = net == State::Idle && GetXiaozhiWebsocket(url, token);
         const Voice now = voice.load();
+        // A heartbeat so the log says what it is waiting for, instead of going quiet.
+        static int64_t heartbeat_at = 0;
+        if (NowMs() >= heartbeat_at) {
+            heartbeat_at = NowMs() + 10000;
+            std::string url_unused, token_unused;
+            ESP_LOGI(kTag, "voice state %d, network state %d, paired %d", static_cast<int>(now), static_cast<int>(net),
+                     GetXiaozhiWebsocket(url_unused, token_unused));
+        }
         if (now == Voice::Off) {
             if (available) { voice = Voice::Idle; ESP_LOGI(kTag, "Ready: say \"hey robot\" or press the button"); }
             button_pressed = wake_heard = false;
             continue;
         }
         if (now == Voice::Idle) {
-            if (!available) { voice = Voice::Off; continue; }
+            if (!available) { ESP_LOGW(kTag, "Voice off: network state %d", static_cast<int>(net)); voice = Voice::Off; continue; }
             const bool woke = wake_heard.exchange(false), pressed = button_pressed.exchange(false);
             if (woke || pressed) { Chirp(); OpenSession(woke ? "hey robot" : nullptr); }
             continue;
@@ -364,6 +402,17 @@ static void VoiceTask(void*) {
             voice = Voice::Listening;
         }
         if (now == Voice::Listening && NowMs() - last_activity > prefs.idle_s * 1000LL) CloseSession("quiet for a while");
+        // A reply that stops arriving (or a "tts stop" that never comes) must not strand the session.
+        if (now == Voice::Speaking && NowMs() - last_received > kReplyTimeoutMs) {
+            ESP_LOGW(kTag, "No audio from the server for %d s; listening again", kReplyTimeoutMs / 1000);
+            Packet packet;
+            while (xQueueReceive(playback, &packet, 0) == pdTRUE) { free(packet.data); --pending_audio; }
+            tts_done = false;
+            SendJson("listen", {{"state", "start"}, {"mode", "auto"}});
+            SetExpression(Expression::Neutral);
+            last_activity = last_received = NowMs();
+            voice = Voice::Listening;
+        }
     }
 }
 
@@ -428,10 +477,8 @@ static void MicTask(void*) {
             while (static_cast<int>(frame.size()) >= kFrameSamples) {
                 esp_audio_enc_in_frame_t in = {reinterpret_cast<uint8_t*>(frame.data()), static_cast<uint32_t>(kFrameSamples * 2)};
                 esp_audio_enc_out_frame_t out = {opus.data(), static_cast<uint32_t>(opus.size()), 0, 0};
-                if (esp_opus_enc_process(encoder, &in, &out) == ESP_AUDIO_ERR_OK && out.encoded_bytes > 0) {
-                    std::lock_guard<std::mutex> lock(ws_mutex);
-                    if (ws && esp_websocket_client_send_bin(ws, reinterpret_cast<const char*>(opus.data()), out.encoded_bytes, pdMS_TO_TICKS(kSendTimeoutMs)) > 0) ++sent_frames;
-                }
+                if (esp_opus_enc_process(encoder, &in, &out) == ESP_AUDIO_ERR_OK && out.encoded_bytes > 0)
+                    Enqueue(std::string(reinterpret_cast<const char*>(opus.data()), out.encoded_bytes), true);
                 frame.erase(frame.begin(), frame.begin() + kFrameSamples);
             }
         }
@@ -480,6 +527,8 @@ void StartVoice() {
     InitCamera();  // optional: without it BitBot simply has no photo tool to offer
     if (!InitAudio()) { ESP_LOGE(kTag, "No audio: voice disabled"); return; }
     ws_events = xEventGroupCreate();
+    outbox = xQueueCreate(24, sizeof(Outgoing));
+    xTaskCreate(SenderTask, "ws-send", 4096, nullptr, 6, nullptr);
     playback = xQueueCreate(64, sizeof(Packet));
     SetVolume(ReadPrefs().volume);
     // Opus encoding and MultiNet need deep stacks. Audio work stays on core 1, away from Wi-Fi on core 0.
@@ -487,6 +536,9 @@ void StartVoice() {
     xTaskCreatePinnedToCore(SpeakerTask, "speaker", 24 * 1024, nullptr, 7, nullptr, 1);
     xTaskCreate(VoiceTask, "voice", 6144, nullptr, 5, nullptr);
 }
-void PressVoiceButton() { button_pressed = true; }
+void PressVoiceButton() {
+    ESP_LOGI(kTag, "Button pressed (voice state %d)", static_cast<int>(voice.load()));
+    button_pressed = true;
+}
 bool VoiceActive() { const Voice v = voice.load(); return v != Voice::Off && v != Voice::Idle; }
 }

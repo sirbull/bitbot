@@ -7,6 +7,7 @@
 #include <esp_log.h>
 #include <esp_mac.h>
 #include <esp_random.h>
+#include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <nvs.h>
@@ -18,6 +19,7 @@
 namespace bitbot {
 static constexpr const char* kOtaUrl = "https://api.tenclass.net/xiaozhi/ota/";
 static constexpr const char* kTag = "bitbot_xiaozhi";
+static constexpr int kFailuresBeforeAlarm = 3;  // a single failed check is normal on a weak link
 static std::mutex status_mutex;
 static XiaozhiStatus status;
 static std::string ws_url, ws_token;  // secret: never logged
@@ -106,7 +108,7 @@ static bool WantsXiaozhi() {
 }
 static void Task(void*) {
     const std::string activate_url = std::string(kOtaUrl) + "activate";
-    int backoff_s = 10;
+    int backoff_s = 5, failures = 0;
     for (;;) {
         if (!WantsXiaozhi()) { vTaskDelay(pdMS_TO_TICKS(1000)); continue; }
         if (GetXiaozhiStatus().pairing == Pairing::Off) SetStatus(Pairing::Checking);
@@ -114,13 +116,17 @@ static void Task(void*) {
         int http = Post(kOtaUrl, DeviceInfo(), response);
         Json reply(http == 200 ? cJSON_Parse(response.c_str()) : nullptr);
         if (!reply.value) {
-            ESP_LOGW(kTag, "Check failed (HTTP %d); retry in %d s", http, backoff_s);
-            SetStatus(Pairing::Failed);
+            wifi_ap_record_t ap = {};
+            const bool have_ap = esp_wifi_sta_get_ap_info(&ap) == ESP_OK;
+            ESP_LOGW(kTag, "Check failed (HTTP %d); Wi-Fi %d dBm; retry in %d s", http, have_ap ? ap.rssi : 0, backoff_s);
+            // Only complain on screen once it keeps failing; one blip on a weak link is normal.
+            if (++failures >= kFailuresBeforeAlarm) SetStatus(Pairing::Failed);
             vTaskDelay(pdMS_TO_TICKS(backoff_s * 1000));
             backoff_s = std::min(backoff_s * 2, 300);
             continue;
         }
-        backoff_s = 10;
+        failures = 0;
+        backoff_s = 5;
         const auto* activation = cJSON_GetObjectItemCaseSensitive(reply.value, "activation");
         const char* code = Text(activation, "code");
         if (!*code) {

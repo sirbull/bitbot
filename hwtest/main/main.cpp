@@ -1,10 +1,12 @@
 // BitBot hardware test: shows on the ST7789 which parts respond.
-// Pins follow docs/wiring.md. Press BOOT (after startup) to play a beep.
+// Pins follow docs/wiring.md. Press BOOT to step the speaker test tone through its levels.
+// Press BOOT in the first 3 s after reset for the audio-only diagnostic: I2S and nothing else.
 #include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <driver/gpio.h>
 #include <driver/i2s_std.h>
 #include <driver/spi_master.h>
@@ -18,11 +20,13 @@
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
 #include <esp_psram.h>
+#include <esp_system.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 #include "../../firmware/main/font5x7.h"
+#include "tone.h"
 
 static const char* TAG = "hwtest";
 
@@ -93,58 +97,189 @@ static bool InitDisplay() {
 }
 
 // ---------- Mic (INMP441) + amp (MAX98357A) on one full-duplex I2S ----------
-static constexpr int kRate = 16000, kFrames = 256;
+// The speaker has its own task and never waits on the microphone: a single writer, paced only by
+// the blocking i2s_channel_write. Anything that can stall that task for longer than the DMA buffer
+// (~120 ms) comes out of the speaker as a scratch, so nothing slow may live in it - printf least
+// of all, since the USB-CDC console blocks for seconds when the host is slow to read.
+static constexpr int kRate = 16000, kFrames = 256, kToneHz = 440;
+static constexpr int kDmaDescs = 8, kDmaFrames = 240;  // how much audio the DMA holds, see InitAudio
 static i2s_chan_handle_t tx, rx;
 static std::atomic<int> micDb{-120}, micSlot{0};
 static std::atomic<bool> micAlive{false}, beep{false}, beeping{false};
+// BOOT cycles the test tone: off, quiet, medium, loud. Crackle that follows the level is power or a
+// damaged speaker; crackle at every level is a bad contact.
+static std::atomic<int> tone_level{0};
+// Level 4 also silences the microphone: mic and amp share BCLK/WS, so if the tone only cleans up
+// here, the fault is that shared bus (or the mic loading it), not the amplifier or the speaker.
+static constexpr float kToneLevels[] = {0.0f, 0.02f, 0.1f, 0.4f, 0.4f};
+static constexpr int kToneModes = 5, kMicOffLevel = 4;
+// Write health, sampled by the slow display loop. Never logged from the audio tasks themselves.
+static std::atomic<uint32_t> txWrites{0}, txShort{0}, txErrors{0}, txWorstUs{0};
+static TaskHandle_t speakerTask, micTask;
 
-static bool InitAudio() {
-    i2s_chan_config_t chan = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-    chan.auto_clear = true;  // silence when we are not writing
-    if (i2s_new_channel(&chan, &tx, &rx) != ESP_OK) return false;
-    i2s_std_config_t std = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(kRate),
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO),
-        .gpio_cfg = {.mclk = GPIO_NUM_NC, .bclk = GPIO_NUM_43, .ws = GPIO_NUM_44, .dout = GPIO_NUM_1, .din = GPIO_NUM_8,
-                     .invert_flags = {}},
-    };
-    return i2s_channel_init_std_mode(tx, &std) == ESP_OK && i2s_channel_init_std_mode(rx, &std) == ESP_OK &&
-           i2s_channel_enable(tx) == ESP_OK && i2s_channel_enable(rx) == ESP_OK;
+// What the I2S bus carries. The MAX98357A works out the sample rate from the BCLK/LRCLK ratio, so
+// a format it cannot lock onto shows up as noise no matter how clean the samples are.
+struct AudioFormat {
+    int rate;
+    i2s_data_bit_width_t bits;
+    i2s_slot_mode_t slots;
+    const char* name;
+};
+static constexpr AudioFormat kDefaultFormat{kRate, I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO,
+                                            "16 kHz 32-bit stereo"};
+static AudioFormat format = kDefaultFormat;
+
+static void CloseAudio() {
+    if (rx) { i2s_channel_disable(rx); i2s_del_channel(rx); rx = nullptr; }
+    if (tx) { i2s_channel_disable(tx); i2s_del_channel(tx); tx = nullptr; }
 }
-static void AudioTask(void*) {
-    static int32_t in[kFrames * 2], out[kFrames * 2];
-    int toneLeft = 0;
+static bool InitAudio(const AudioFormat& fmt = kDefaultFormat, bool with_mic = true) {
+    format = fmt;
+    i2s_chan_config_t chan = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    chan.auto_clear = true;  // an underrun is silence, not the last buffer repeated as a buzz
+    chan.dma_desc_num = kDmaDescs;  // 8 x 240 frames: 120 ms at 16 kHz, same as the firmware
+    if (i2s_new_channel(&chan, &tx, with_mic ? &rx : nullptr) != ESP_OK) return false;
+    i2s_std_config_t std = {
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(static_cast<uint32_t>(fmt.rate)),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(fmt.bits, fmt.slots),
+        .gpio_cfg = {.mclk = GPIO_NUM_NC, .bclk = GPIO_NUM_43, .ws = GPIO_NUM_44, .dout = GPIO_NUM_1,
+                     .din = with_mic ? GPIO_NUM_8 : GPIO_NUM_NC, .invert_flags = {}},
+    };
+    if (i2s_channel_init_std_mode(tx, &std) != ESP_OK || i2s_channel_enable(tx) != ESP_OK) return false;
+    if (with_mic && (i2s_channel_init_std_mode(rx, &std) != ESP_OK || i2s_channel_enable(rx) != ESP_OK)) return false;
+    // What the clock tree actually produced, not what we asked for. The MAX98357A needs 32, 48 or 64
+    // BCLK per frame and a 8-96 kHz LRCLK; anything else and it will not lock.
+    i2s_chan_info_t info = {};
+    if (i2s_channel_get_info(tx, &info) == ESP_OK)
+        ESP_LOGI(TAG, "I2S %s: sclk %lu Hz, mclk %lu Hz, bclk %lu Hz = %lu per frame, DMA %lu bytes", fmt.name,
+                 info.sclk_hz, info.mclk_hz, info.bclk_hz, info.bclk_hz / fmt.rate, info.total_dma_buf_size);
+    return true;
+}
+
+// The waveform itself lives in tone.h, checked on a PC by tools/tone_check.cpp.
+static size_t FillTone(void* buffer, int frames, const AudioFormat& fmt, float amplitude, float hz, float& phase) {
+    return FillTone(buffer, frames, fmt.rate, fmt.bits == I2S_DATA_BIT_WIDTH_16BIT ? 16 : 32,
+                    fmt.slots == I2S_SLOT_MODE_STEREO ? 2 : 1, amplitude, hz, phase);
+}
+// Writes and accounts for one buffer. Returns the time the write took, so a caller can see a stall.
+static uint32_t WriteTone(const void* buffer, size_t bytes) {
+    const int64_t started = esp_timer_get_time();
+    size_t written = 0;
+    const esp_err_t err = i2s_channel_write(tx, buffer, bytes, &written, pdMS_TO_TICKS(500));
+    const uint32_t took = static_cast<uint32_t>(esp_timer_get_time() - started);
+    ++txWrites;
+    if (err != ESP_OK) ++txErrors;
+    else if (written != bytes) ++txShort;
+    return took;
+}
+
+// Always writing - silence when there is no tone - keeps the DMA fed and the amplifier locked, so
+// the noise floor between tones is as informative as the tone itself.
+static void SpeakerTask(void*) {
+    static uint8_t buffer[kFrames * 2 * sizeof(int32_t)];  // worst case: stereo, 32-bit slots
     float phase = 0;
+    int pip = 0;
+    int64_t loop_started = esp_timer_get_time();
     for (;;) {
+        if (beep.exchange(false)) pip = kRate / 2;  // 0.5 s startup pip
+        const int level = tone_level.load();
+        float amplitude = 0, hz = kToneHz;
+        if (level > 0) {
+            amplitude = kToneLevels[level];
+        } else if (pip > 0) {
+            amplitude = 0.1f; hz = pip > kRate / 4 ? 660 : 880;  // two-tone pip
+            pip -= kFrames;
+        }
+        beeping = level > 0 || pip > 0;
+        const size_t bytes = FillTone(buffer, kFrames, format, amplitude, hz, phase);
+        WriteTone(buffer, bytes);
+        // How long one turn of this loop took. Longer than the DMA holds (120 ms) means the speaker
+        // ran dry and the gap was audible.
+        const int64_t now = esp_timer_get_time();
+        const uint32_t took = static_cast<uint32_t>(now - loop_started);
+        loop_started = now;
+        if (took > txWorstUs.load()) txWorstUs = took;
+    }
+}
+
+static void MicTask(void*) {
+    static int32_t in[kFrames * 2];
+    bool running = true;
+    for (;;) {
+        // The last tone level switches the microphone off, so the transmitter owns the shared
+        // BCLK/WS alone. A tone that only cleans up here points at that shared bus, not the amp.
+        const bool want = tone_level != kMicOffLevel;
+        if (want != running) {
+            if (want) i2s_channel_enable(rx); else i2s_channel_disable(rx);
+            running = want;
+            micAlive = false;
+        }
+        if (!running) { vTaskDelay(pdMS_TO_TICKS(100)); continue; }
         size_t got = 0;
         if (i2s_channel_read(rx, in, sizeof(in), &got, pdMS_TO_TICKS(500)) != ESP_OK || got == 0) { micAlive = false; continue; }
         // L/R to GND puts the mic in the left slot; check both in case it is tied high.
         // An undriven SD line reads stuck 0 / -1, with the odd glitch bit.
-        int frames = got / 8, stuck[2] = {};
+        const int frames = got / 8;
+        int stuck[2] = {};
         int32_t peaks[2] = {};
         for (int i = 0; i < frames * 2; ++i) {
             stuck[i % 2] += (in[i] >> 8) == 0 || (in[i] >> 8) == -1;
             peaks[i % 2] = std::max(peaks[i % 2], std::abs(in[i] >> 8));  // 24-bit, left-aligned
         }
-        int slot = stuck[1] < stuck[0];
+        const int slot = stuck[1] < stuck[0];
         micAlive = stuck[slot] < frames / 8;  // a live mic is almost never exactly 0 / -1
         micSlot = slot;
-        int32_t peak = peaks[slot];
-        micDb = peak > 0 ? static_cast<int>(20 * log10f(peak / 8388608.0f)) : -120;
+        micDb = peaks[slot] > 0 ? static_cast<int>(20 * log10f(peaks[slot] / 8388608.0f)) : -120;
+    }
+}
 
-        if (beep.exchange(false)) toneLeft = kRate / 2;  // 0.5 s
-        beeping = toneLeft > 0;
-        if (toneLeft > 0) {
-            for (int i = 0; i < kFrames; ++i) {
-                float f = toneLeft > kRate / 4 ? 660 : 880;  // two-tone pip
-                phase = fmodf(phase + 2 * float(M_PI) * f / kRate, 2 * float(M_PI));
-                int32_t v = static_cast<int32_t>(sinf(phase) * 0.1f * INT32_MAX);  // ~-20 dBFS, gentle
-                out[i * 2] = out[i * 2 + 1] = v;
-            }
-            toneLeft -= kFrames;
-            size_t written;
-            i2s_channel_write(tx, out, sizeof(out), &written, pdMS_TO_TICKS(100));
+// ---------- Audio-only diagnostic ----------
+// Press BOOT in the first seconds after reset to get here: no display, no camera, no battery, no
+// microphone, no extra task - just app_main writing a 440 Hz sine into I2S. If the tone is still not
+// clean here, nothing in the rest of the firmware is to blame. Each further BOOT press steps to the
+// next format; clean in one format and scratchy in another means the amplifier cannot lock onto that
+// format, which is not a wiring fault.
+static constexpr AudioFormat kFormats[] = {
+    {16000, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO, "16 kHz 16-bit stereo"},
+    {16000, I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO, "16 kHz 32-bit stereo (app default)"},
+    {16000, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO, "16 kHz 16-bit mono"},
+    {44100, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO, "44.1 kHz 16-bit stereo"},
+    {48000, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO, "48 kHz 16-bit stereo"},
+};
+static constexpr int kDiagnosticWindowMs = 3000;
+static void AudioOnlyDiagnostic() {
+    ESP_LOGW(TAG, "AUDIO-ONLY DIAGNOSTIC: display, camera, battery and microphone are all off.");
+    ESP_LOGW(TAG, "440 Hz at 10%% of full scale. Press BOOT to step to the next I2S format.");
+    static uint8_t buffer[kFrames * 2 * sizeof(int32_t)];
+    for (size_t i = 0;; i = (i + 1) % std::size(kFormats)) {
+        const AudioFormat& fmt = kFormats[i];
+        if (!InitAudio(fmt, false)) {
+            ESP_LOGE(TAG, "format %u (%s): I2S init FAILED", static_cast<unsigned>(i), fmt.name);
+            CloseAudio(); vTaskDelay(pdMS_TO_TICKS(2000)); continue;
         }
+        txWrites = txShort = txErrors = txWorstUs = 0;
+        float phase = 0;
+        int64_t next_report = 0, loop_started = esp_timer_get_time();
+        bool was_pressed = true;  // still held from the press that got us here, or the last step
+        for (;;) {
+            const size_t bytes = FillTone(buffer, kFrames, fmt, 0.1f, kToneHz, phase);
+            WriteTone(buffer, bytes);
+            const int64_t now = esp_timer_get_time();
+            if (static_cast<uint32_t>(now - loop_started) > txWorstUs.load()) txWorstUs = static_cast<uint32_t>(now - loop_started);
+            loop_started = now;
+            const bool pressed = gpio_get_level(GPIO_NUM_0) == 0;
+            if (pressed && !was_pressed) break;
+            was_pressed = pressed;
+            if (now > next_report) {  // the write blocks ~16 ms, so this costs nothing in the gaps
+                next_report = now + 2000000;
+                ESP_LOGI(TAG, "%s: %lu writes, %lu short, %lu errors, worst gap %lu us (DMA holds %d), heap %u min %u, stack %u",
+                         fmt.name, txWrites.load(), txShort.load(), txErrors.load(), txWorstUs.load(),
+                         kDmaDescs * kDmaFrames * 1000000 / fmt.rate,
+                         static_cast<unsigned>(esp_get_free_heap_size()), static_cast<unsigned>(esp_get_minimum_free_heap_size()),
+                         static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+            }
+        }
+        CloseAudio();
     }
 }
 
@@ -211,6 +346,14 @@ extern "C" void app_main() {
     gpio_config_t boot = {.pin_bit_mask = 1ULL << GPIO_NUM_0, .mode = GPIO_MODE_INPUT, .pull_up_en = GPIO_PULLUP_ENABLE,
                           .pull_down_en = GPIO_PULLDOWN_DISABLE, .intr_type = GPIO_INTR_DISABLE};
     gpio_config(&boot);
+    // BOOT pressed in the first seconds after reset: nothing but I2S from here on. It cannot be held
+    // through the reset itself - GPIO0 low at reset is the ROM download mode strap, and app_main
+    // would never run - so the window opens once we are already up.
+    ESP_LOGI(TAG, "Press BOOT within %d s for the audio-only diagnostic", kDiagnosticWindowMs / 1000);
+    for (int64_t until = esp_timer_get_time() + kDiagnosticWindowMs * 1000; esp_timer_get_time() < until;) {
+        if (gpio_get_level(GPIO_NUM_0) == 0) AudioOnlyDiagnostic();  // never returns
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
 
     // Wiring probe: a pin that stays high with the internal pull-down has an external
     // pull-up (module RES/BLK) or a supply on it; one that stays low with pull-up is grounded.
@@ -231,7 +374,12 @@ extern "C" void app_main() {
     }
     bool audio = InitAudio();
     ESP_LOGI(TAG, "i2s %s", audio ? "OK" : "FAIL");
-    if (audio) { xTaskCreate(AudioTask, "audio", 4096, nullptr, 5, nullptr); beep = true; }  // startup pip
+    if (audio) {
+        // The speaker outranks the microphone: it is the one with a hard deadline.
+        xTaskCreatePinnedToCore(SpeakerTask, "speaker", 4096, nullptr, 6, &speakerTask, 1);
+        xTaskCreatePinnedToCore(MicTask, "mic", 4096, nullptr, 5, &micTask, 1);
+        beep = true;  // startup pip
+    }
     bool battery = InitBattery();
     const char* camera = InitCamera();
     ESP_LOGI(TAG, "camera %s", camera ? camera : "not found");
@@ -252,7 +400,10 @@ extern "C" void app_main() {
     bool wasPressed = false;
     for (int tick = 0;; ++tick) {
         bool pressed = gpio_get_level(GPIO_NUM_0) == 0;
-        if (pressed && !wasPressed) beep = true;
+        if (pressed && !wasPressed) {
+            tone_level = (tone_level + 1) % kToneModes;
+            ESP_LOGI(TAG, "BOOT pressed: tone level %d (%.0f%% of full scale)", tone_level.load(), kToneLevels[tone_level] * 100);
+        }
         wasPressed = pressed;
 
         if (camera && display && DrawCameraFrame()) ++frames;
@@ -279,8 +430,11 @@ extern "C" void app_main() {
             row(1, kGreen, std::clamp((db + 90) * 2, 1, 120));  // -90..-30 dBFS
         }
 
-        snprintf(buf, sizeof(buf), "%s", audio ? (beeping ? "SPEAKER: BEEP!" : "SPEAKER BOOT=BEEP") : "SPEAKER I2S FAIL");
-        row(2, !audio ? kRed : beeping ? kYellow : kWhite);
+        if (!audio) snprintf(buf, sizeof(buf), "SPEAKER I2S FAIL");
+        else if (tone_level == 0) snprintf(buf, sizeof(buf), "SPEAKER BOOT=TONE");
+        else if (tone_level == kMicOffLevel) snprintf(buf, sizeof(buf), "TONE 4: MIC OFF");
+        else snprintf(buf, sizeof(buf), "TONE %d: %.0f%%", tone_level.load(), kToneLevels[tone_level] * 100);
+        row(2, !audio ? kRed : tone_level > 0 ? kYellow : kWhite);
 
         if (tick % 10 == 0) {
             float spread = 0, v = battery ? BatteryVolts(spread) : 0;
@@ -290,7 +444,14 @@ extern "C" void app_main() {
             else if (floating) snprintf(buf, sizeof(buf), "BATT FLOATING %.1fV", v);
             else snprintf(buf, sizeof(buf), ok ? "BATT %.2fV" : "BATT %.2fV ?", v);
             row(3, ok ? kGreen : kRed);
-            ESP_LOGI(TAG, "batt %.2fV spread %.2f mic %s (%s) %ddB fps %.1f", v, spread, micAlive ? "ok" : "none", micSlot ? "R" : "L", micDb.load(), fps);
+            ESP_LOGI(TAG, "tone %d batt %.2fV spread %.2f mic %s (%s) %ddB fps %.1f", tone_level.load(), v, spread, micAlive ? "ok" : "none", micSlot ? "R" : "L", micDb.load(), fps);
+            // Speaker health. A worst gap past the DMA depth (120000 us here) means it ran dry,
+            // and that gap is the scratch.
+            if (audio)
+                ESP_LOGI(TAG, "i2s %lu writes, %lu short, %lu errors, worst gap %lu us, heap %u min %u, stack spk %u mic %u",
+                         txWrites.load(), txShort.load(), txErrors.load(), txWorstUs.exchange(0),
+                         static_cast<unsigned>(esp_get_free_heap_size()), static_cast<unsigned>(esp_get_minimum_free_heap_size()),
+                         static_cast<unsigned>(uxTaskGetStackHighWaterMark(speakerTask)), static_cast<unsigned>(uxTaskGetStackHighWaterMark(micTask)));
         }
 
         if (camera) snprintf(buf, sizeof(buf), "CAMERA %s %.0ffps", camera, fps);

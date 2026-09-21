@@ -57,18 +57,22 @@ extern "C" void app_main() {
             if (!pressed_at) pressed_at = NowMs();
             if (!handled && NowMs() - pressed_at >= 3000) { OpenSetup(); handled = true; }
         } else {
-            // A short press (not the 3 s setup hold) starts or ends a conversation.
-            if (pressed_at && !handled && NowMs() - pressed_at >= 30 && NowMs() - pressed_at < 1000) PressVoiceButton();
+            // Any press that did not reach the 3 s setup hold starts or ends a conversation.
+            if (pressed_at && !handled && NowMs() - pressed_at >= 30) {
+                ESP_LOGI("bitbot", "Button released after %d ms", static_cast<int>(NowMs() - pressed_at));
+                PressVoiceButton();
+            }
             pressed_at = 0; handled = false;
         }
         TickNetwork();
         State state; std::string ssid, password;
         { std::lock_guard<std::mutex> lock(shared.mutex); state = shared.state; ssid = shared.setup_ssid; password = shared.setup_password; }
         SetDisplayPages(Guide(state, ssid, password));
-        // Sleep: after a quiet minute the face dims. Any conversation wakes it up again.
+        // Sleep: while idle, waiting for "Hey Robot", the screen dims. A conversation wakes it.
+        constexpr int64_t kDimAfterMs = CONFIG_BITBOT_DISPLAY_DIM_SECONDS * 1000LL;
         static int64_t awake_since = 0;
         if (VoiceActive() || state != State::Idle) awake_since = NowMs();
-        SetDisplayDim(NowMs() - awake_since > 60000);
+        SetDisplayDim(kDimAfterMs > 0 && NowMs() - awake_since > kDimAfterMs);
         TickDisplay(state);
         bool restart;
         { std::lock_guard<std::mutex> lock(shared.mutex); restart = shared.restart_at && NowMs() >= shared.restart_at; }

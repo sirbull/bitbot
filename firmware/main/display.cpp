@@ -24,7 +24,7 @@ static uint16_t* pixels = nullptr;
 static constexpr int kWidth = 240, kHeight = 240, kRows = 16;
 // Text pages below the eyes: a small grey line and a big white line, rotating every kPageMs.
 static constexpr int kTextTop = kFaceBottom, kPageMs = 4000;
-static constexpr uint16_t kTextSmall = 0xa534, kTextBig = 0xffff, kTextDim = 0x52aa;
+static constexpr uint16_t kTextSmall = 0xa534, kTextBig = 0xffff;
 static std::mutex text_mutex;
 static std::vector<Page> pages;
 static bool pages_changed = false;
@@ -35,6 +35,14 @@ static uint16_t* image = nullptr;        // PSRAM copy of the last photo
 static int image_w = 0, image_h = 0;
 static int64_t image_until = 0;
 static bool dim_drawn = false;
+
+// Idle dimming. There is no backlight pin, so this scales the pixels themselves; each RGB565
+// channel keeps its own bits (a shift would bleed red's LSB into green).
+static constexpr uint16_t Dimmed(uint16_t c, int percent) {
+    return static_cast<uint16_t>((((c >> 11) * percent / 100) << 11) | (((c >> 5 & 0x3f) * percent / 100) << 5) | ((c & 0x1f) * percent / 100));
+}
+static_assert(Dimmed(0xffff, 100) == 0xffff && Dimmed(0xffff, 0) == 0 && Dimmed(0xffff, 50) == (15 << 11 | 31 << 5 | 15), "dimming must scale each channel without bleeding into the next");
+static uint16_t Dim(uint16_t c) { return dim.load() ? Dimmed(c, CONFIG_BITBOT_DISPLAY_DIM_PERCENT) : c; }
 
 static bool TransferDone(esp_lcd_panel_io_handle_t, esp_lcd_panel_io_event_data_t*, void*) {
     BaseType_t woken = pdFALSE;
@@ -81,9 +89,9 @@ static bool ShowFrame(Frame frame, int ox, int oy) {
             std::fill_n(ox >= 0 ? out : out + kFaceW + ox, std::abs(ox), kBackground);
             std::copy_n(ox >= 0 ? in : in - ox, kFaceW - std::abs(ox), ox >= 0 ? out + ox : out);
         }
-        // Halve each RGB565 channel: a sleeping face, without a backlight pin to turn down.
+        // A sleeping face, background included, without a backlight pin to turn down.
         if (dim.load())
-            for (int i = 0; i < rows * kFaceW; ++i) { uint16_t c = pixels[i]; pixels[i] = (c >> 1 & 0x7800) | (c >> 1 & 0x03e0) | (c >> 1 & 0x000f); }
+            for (int i = 0; i < rows * kFaceW; ++i) pixels[i] = Dimmed(pixels[i], CONFIG_BITBOT_DISPLAY_DIM_PERCENT);
         if (!Blit(0, top, kFaceW, rows)) return false;
     }
     return true;
@@ -133,7 +141,7 @@ bool InitDisplay() {
 }
 bool DisplayReady() { return ready.load(); }
 void SetDisplayImage(const uint16_t* source, int width, int height, int ms) {
-    if (!ready.load() || width > kWidth || height > kFaceBottom) return;
+    if (!ready.load() || width > kWidth || height > kHeight) return;
     std::lock_guard<std::mutex> lock(image_mutex);
     uint16_t* copy = static_cast<uint16_t*>(heap_caps_malloc(width * height * 2, MALLOC_CAP_SPIRAM));
     if (!copy) return;
@@ -141,18 +149,28 @@ void SetDisplayImage(const uint16_t* source, int width, int height, int ms) {
     heap_caps_free(image);
     image = copy; image_w = width; image_h = height; image_until = NowMs() + ms;
 }
-// Centred in the face area, with the rest of it cleared.
+bool DisplayShowingImage() {
+    std::lock_guard<std::mutex> lock(image_mutex);
+    return image && NowMs() < image_until;
+}
+// Centred on the whole screen. A picture as tall as the screen covers the text area too.
 static bool ShowImage() {
     std::lock_guard<std::mutex> lock(image_mutex);
     if (!image) return false;
-    const int x = (kWidth - image_w) / 2, y = (kFaceBottom - image_h) / 2;
-    if (!Fill(0, 0, kWidth, y, kBackground)) return false;
+    const int x = (kWidth - image_w) / 2, y = (kHeight - image_h) / 2;
+    static bool cleared = false;
+    if (!cleared) {  // only once per picture: clearing every frame would flicker a live view
+        if (y > 0 && !Fill(0, 0, kWidth, y, kBackground)) return false;
+        if (y + image_h < kHeight && !Fill(0, y + image_h, kWidth, kHeight - y - image_h, kBackground)) return false;
+        cleared = true;
+    }
     for (int row = 0; row < image_h; row += kRows) {
         int rows = std::min(kRows, image_h - row);
         std::copy_n(image + row * image_w, rows * image_w, pixels);
         if (!Blit(x, y + row, image_w, rows)) return false;
     }
-    return Fill(0, y + image_h, kWidth, kFaceBottom - y - image_h, kBackground);
+    if (NowMs() >= image_until) cleared = false;  // next picture starts with a clean border again
+    return true;
 }
 // UTF-8 to font indices: ASCII plus æøåÆØÅ; anything else becomes '?'.
 static std::vector<uint8_t> Glyphs(const std::string& text) {
@@ -172,7 +190,7 @@ struct Run { std::vector<uint8_t> glyphs; int x, y, halves; uint16_t color; };
 static constexpr int Scaled(int font_px, int halves) { return font_px * halves / 2; }
 // Centred, at the largest scale up to max_halves that fits the width.
 static Run Layout(const std::string& text, int y, int max_halves, uint16_t color) {
-    Run run{Glyphs(text), 0, y, max_halves, dim.load() ? kTextDim : color};
+    Run run{Glyphs(text), 0, y, max_halves, Dim(color)};
     int n = static_cast<int>(run.glyphs.size());
     auto width = [&] { return Scaled(n * 6 - 1, run.halves); };
     while (run.halves > 2 && width() > kWidth - 8) --run.halves;
@@ -227,7 +245,7 @@ static void Paint(const Run& run, int top) {
 static bool DrawPage(const Page& page) {
     const Run runs[] = {Layout(page.first, kTextTop + 10, 4, kTextSmall), Layout(page.second, kTextTop + 30, 4, kTextBig)};
     for (int top = kTextTop; top < kHeight; top += kRows) {
-        std::fill_n(pixels, kWidth * kRows, kBackground);
+        std::fill_n(pixels, kWidth * kRows, Dim(kBackground));
         for (const auto& run : runs) Paint(run, top);
         if (!Blit(0, top, kWidth, std::min(kRows, kHeight - top))) return false;
     }
@@ -257,7 +275,7 @@ static bool DrawCaption(const std::string& text) {
     const int first = kHeight - 4 - kGlyphH - (static_cast<int>(lines.size()) - 1) * kLineH;
     for (size_t i = 0; i < lines.size(); ++i) runs.push_back(Layout(lines[i], first + static_cast<int>(i) * kLineH, kHalves, kTextBig));
     for (int top = kTextTop; top < kHeight; top += kRows) {
-        std::fill_n(pixels, kWidth * kRows, kBackground);
+        std::fill_n(pixels, kWidth * kRows, Dim(kBackground));
         for (const auto& run : runs) Paint(run, top);
         if (!Blit(0, top, kWidth, std::min(kRows, kHeight - top))) return false;
     }
@@ -277,6 +295,7 @@ void SetDisplayPages(std::vector<Page> next) {
     pages = std::move(next); pages_changed = true;
 }
 static void TickText() {
+    if (DisplayShowingImage()) return;
     static int last_page = -1;
     Page page; bool redraw; std::string text;
     {
@@ -316,7 +335,8 @@ void TickDisplay(State) {
     bool showing_image;
     { std::lock_guard<std::mutex> lock(image_mutex); showing_image = image && now < image_until; }
     if (showing_image) {
-        if (!showed_image) { showed_image = true; ShowImage(); }
+        showed_image = true;
+        ShowImage();  // a live view replaces this every frame; a still photo just redraws itself
         return;
     }
     bool dirty = blink_at < 0 || dim_drawn != dim.load() || showed_image;

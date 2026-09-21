@@ -22,4 +22,6 @@ void SetDisplayCaption(std::string text);
 void SetDisplayDim(bool dim);
 // Show a picture (RGB565) over the face for a while: what the camera just saw.
 void SetDisplayImage(const uint16_t* pixels, int width, int height, int ms);
+// True while a picture owns the screen, so callers can keep feeding a live view.
+bool DisplayShowingImage();
 }
