@@ -1,57 +1,66 @@
 # BitBot
 
-A small portable AI companion for the **Seeed XIAO ESP32-S3 Sense**, with a
-**8-pin ST7789 240×240** display, camera, microphone, and speaker. Norwegian
-and English are the default pair, with an international BCP-47 language
-preference and an independent speech service with provider-aware model/voice
-dropdowns. The desktop
-simulator includes a clearly labelled local browser voice preview.
+**A tiny robot face with a voice, a camera, and a big personality.**
 
-**Current milestone: commissioning and hardware bring-up.** The English setup
-portal, Wi-Fi profiles, settings storage, and optional ST7789 test renderer
-are implemented. Voice conversation, wake word, camera, and real power optimization are still to come. No paid AI calls are made.
+BitBot is a DIY AI companion built around the Seeed Studio XIAO ESP32-S3 Sense. It listens for a wake phrase or a button press, shows expressions and captions on a 240 × 240 screen, and can take a photo when asked what it sees. Its voice pipeline sends replies to a small speaker. The ESP32-S3 handles the hardware and local wake detection; conversations run through XiaoZhi over Wi-Fi.
 
-## Continue development at home
+> **Prototype status:** The display, face, camera, setup portal, wake phrases, and XiaoZhi conversation path have been implemented and tested in stages. Audible output from the physical speaker and the battery power system still need final bench verification. Battery life has not been measured.
 
-Install Node.js 22 or later, then in this repository:
+## Meet the hardware
+
+![BitBot circuit wiring schematic](bitbot-wiring.jpg)
+
+[Open the full-size circuit diagram](bitbot-wiring.jpg) · [Read the latest wiring notes](docs/wiring.md)
+
+The image shows how the controller, screen, microphone, amplifier, speaker, controls, and power module fit together. It is a **prototype schematic**, so check the wiring notes before building: for example, the current notes connect the amplifier's `SD` pin to 3V3, while the image labels it `NC`.
+
+### Parts at a glance
+
+| Part | What it does |
+| --- | --- |
+| **Seeed Studio XIAO ESP32-S3 Sense** | Runs BitBot; includes Wi-Fi and the camera. |
+| **1.54-inch ST7789 display, 240 × 240, 8-pin** | Shows the animated face, setup instructions, photos, and captions. |
+| **INMP441 I²S microphone** | Captures speech. |
+| **MAX98357A I²S amplifier + small speaker** | Plays BitBot's replies. |
+| **Momentary button** (optional) | Starts a conversation or reopens setup; the onboard BOOT button also works. |
+| **1S Li-ion cell, charger/5 V boost module, and latching switch** | Planned portable power; validate the cell and charging current before connecting them. |
+
+See the [full component list](docs/components.md) for module details and the [hardware notes](docs/hardware.md) for electrical constraints. The Sense board's SD card slot stays empty because its pins are shared with the display.
+
+## How BitBot works
+
+1. **Set it up.** On first boot, BitBot opens its own Wi-Fi hotspot. Join it and open `http://192.168.4.1` to save a 2.4 GHz network and preferences. The screen shows setup information.
+2. **Get its attention.** Press BOOT or the optional external button, or say **“hey robot”** or **“hey bit robot”**. Wake detection runs on the ESP32-S3. A custom “hey BitBot” wake model is future work.
+3. **Have a conversation.** The microphone audio travels to XiaoZhi over Wi-Fi. BitBot receives the reply as text and audio, shows captions and a matching expression, and sends the audio to its speaker.
+4. **Ask what it sees.** When the assistant requests a photo, BitBot captures one with the Sense camera, previews it on the display, and sends it to the vision service. The camera is not used continuously for conversation.
+
+The face has twelve expressions, blinking eyes, and a dimmed idle view. Press the button again to interrupt or end a reply. [Learn more about the architecture](docs/architecture.md).
+
+## What works today
+
+| Area | Status |
+| --- | --- |
+| Screen, expressions, and captions | Implemented; ST7789 wiring verified on hardware. |
+| Wi-Fi setup | Local English portal, saved network profiles, and a desktop simulator. |
+| Voice and vision | XiaoZhi pairing and conversation flow, local wake phrases, and on-demand camera capture are implemented. Physical speaker output is still being diagnosed. |
+| Portable power | Circuit planned; charging current, boost behavior, and battery runtime still need measurement. |
+
+BitBot is a hands-on prototype, not a finished product. The [next-steps checklist](docs/next-steps.md) tracks the remaining physical tests.
+
+## Try the setup portal on your computer
+
+The simulator lets you explore BitBot's settings without hardware or an AI account. Install **Node.js 22 or later**, then run:
 
 ```sh
-git pull --ff-only
 npm ci
 npm run dev
 ```
 
-Open **http://127.0.0.1:4173**. In Windows PowerShell, use `npm.cmd` if script
-execution policy blocks `npm.ps1`.
+Open **http://127.0.0.1:4173**. The simulator stores preferences in ignored `.local/simulator.json`; use dummy credentials. Its Wi-Fi checks are simulated and it makes no AI calls. To exercise a failed network test, enter `wrong-password`; other valid demo passwords simulate success.
 
-The desktop simulator saves its settings in ignored `.local/simulator.json`.
-Use **dummy credentials**. It does not connect your computer to Wi-Fi or call
-an AI service. Use the password `wrong-password` to exercise a failed network
-test; other valid demo passwords simulate success. A new network is saved only
-after success. Restarting the server preserves saved preferences.
+## Build and flash the device
 
-## Build the portal and run checks
-
-```sh
-npm ci
-npx playwright install chromium
-npm run check
-```
-
-The build generates compressed C++ assets under `firmware/main/generated/`.
-Commit these generated files when changing `web/` or the settings schema.
-The portal is approximately 14 KiB compressed and uses no external scripts,
-images, fonts, or CDN. Node is a development tool, not a requirement on the ESP.
-
-Checks cover secret redaction, provider-specific keys, storage failures,
-invalid inputs, network limits, failed network changes, concurrent saves,
-HTTP access controls, and browser setup on mobile and desktop. GitHub Actions
-also compiles the ESP32-S3 firmware and uploads build artifacts.
-
-## Build and flash the ESP32-S3
-
-Use an **ESP-IDF 6.0.2** development shell. The local workstation used for
-development did not have ESP-IDF installed; firmware compilation runs in CI.
+The firmware targets **ESP-IDF 6.0.2** and the original **XIAO ESP32-S3 Sense**. In an ESP-IDF shell:
 
 ```sh
 cd firmware
@@ -60,97 +69,28 @@ idf.py build
 idf.py -p COM5 flash monitor
 ```
 
-Replace `COM5` with the board's serial port (for example `/dev/ttyACM0` on Linux).
-On a Mac without ESP-IDF, flash the CI build instead: see [docs/flashing.md](docs/flashing.md).
-Only flash the actual XIAO ESP32-S3 Sense. Do not use `erase-flash` for ordinary
-updates: it removes saved settings. This commissioning partition layout is new;
-flashing over another project's firmware can require a deliberate migration.
+Replace `COM5` with your board's serial port. If you do not have ESP-IDF locally, see the [CI artifact flashing guide](docs/flashing.md). On first boot, join the `BitBot-XXXX` hotspot and open **http://192.168.4.1**. Holding BOOT for three seconds after startup reopens setup without erasing saved settings.
 
-**Start with USB power and no unverified external power wiring.** On first boot,
-the firmware opens `BitBot-XXXX`. Its generated setup password is shown through
-the physical USB serial console in this bring-up version. Join that hotspot
-and open **http://192.168.4.1**. Stay connected if your phone says "no internet".
-Add a 2.4 GHz personal/open network, save preferences, and choose **Finish setup**.
+**Start on USB power with the battery module disconnected.** Read the [wiring guide](docs/wiring.md) before connecting external power. The XIAO's USB-C port and the boost module's switched 5 V output must not power the board at the same time.
 
-At a new location, hold onboard **BOOT for three seconds after startup**. This
-reopens setup without erasing saved Wi-Fi, personality, or keys. RESET just
-reboots; BOOT held during reset enters the firmware download mode. After initial
-setup, losing Wi-Fi does not automatically open the hotspot. Reconfiguration
-closes after ten minutes; first-boot setup stays available until a network is
-saved. Up to five profiles are remembered.
+## For contributors
 
-The portal only checks Wi-Fi association and DHCP, **not internet or provider
-availability**. Enterprise authentication and hotel web-login networks are not
-supported. A 2.4 GHz phone hotspot is useful for portable demos.
+Run the portal build and automated checks with:
 
-## The confirmed display
+```sh
+npm ci
+npx playwright install chromium
+npm run check
+```
 
-Verified on hardware 2026-09-19 (8-pin module):
+The build generates compressed portal assets in `firmware/main/generated/`; commit those assets when changing `web/` or the settings schema. GitHub Actions also compiles the ESP32-S3 firmware.
 
-| Display | XIAO signal allocation |
+| Path | Contents |
 | --- | --- |
-| GND | GND |
-| VCC | 3V3 |
-| SCL (SPI clock) | D8 / GPIO7 |
-| SDA (SPI MOSI) | D10 / GPIO9 |
-| RST | D1 / GPIO2 |
-| DC | D4 / GPIO5 |
-| CS | D3 / GPIO4 |
-| BL | 3V3 (backlight always on; not GPIO-driven) |
+| [`firmware/`](firmware/) | ESP-IDF firmware for setup, face, audio, camera, and network. |
+| [`web/`](web/) | Local setup portal shared by the device and simulator. |
+| [`hwtest/`](hwtest/) | Separate hardware bring-up firmware. |
+| [`docs/`](docs/) | Wiring, components, architecture, flashing, and progress notes. |
+| [`BitBot_PROJECT_SPEC.md`](BitBot_PROJECT_SPEC.md) | Original project vision and requirements. |
 
-The driver uses ESP-IDF's `esp_lcd` ST7789 driver, SPI mode 3, RGB565, and
-conservative 10 MHz SPI. Do not insert or
-initialize an SD card on the shared Sense SPI wiring. GPIO6 is unused; there is
-no battery sensing. See [hardware review](docs/hardware.md).
-
-The display is enabled by default (**BitBot hardware bring-up → Enable verified
-8-pin ST7789 240x240 display wiring** in `idf.py menuconfig`). It shows the face
-(twelve expressions, blinking, eyes that look around) in the top 168 rows and
-text below: setup instructions with the hotspot password, the XiaoZhi pairing
-code, and conversation captions. Colour inversion, RGB/BGR order, row offset and
-SPI clock are configurable. The backlight has no GPIO, so "sleep" dims the
-pixels instead: after 30 idle seconds (only listening for "Hey Robot") the
-whole screen drops to 20 % brightness, and any conversation restores it. Both
-numbers are in **BitBot hardware bring-up**; 0 seconds turns dimming off. The
-panel itself still glows, since BL sits on 3V3.
-
-## Talking to it
-
-Verified end to end against XiaoZhi on 2026-09-20: microphone → Opus → XiaoZhi →
-reply text and Opus audio → speaker, with captions and expressions on screen.
-
-| | |
-| --- | --- |
-| Start a conversation | Short press of BOOT or the D2 button, or a wake phrase |
-| Wake phrases | "hey robot", "hey bit robot", "okay robot", "hi robot" |
-| Interrupt a reply | Say a wake phrase, or press the button |
-| End it | Press the button, or stay quiet (the idle timeout from settings) |
-| Camera | XiaoZhi asks for a photo when you ask what it sees; the photo appears on screen |
-
-The wake phrases are not "hey bitbot", and that is a limitation of the
-recogniser, not a choice: esp-sr's English MultiNet only matches phrases built
-from real English words. Measured on this board by feeding recorded clips
-directly into the recogniser, "hey robot" and "hey bit robot" are recognised,
-while "hey bitbot", "hey bit bot" and even "hey bot" never are. A real
-"hey bitbot" needs a WakeNet model trained on that phrase.
-
-## Project map
-
-| Path | Purpose |
-| --- | --- |
-| [BitBot_PROJECT_SPEC.md](BitBot_PROJECT_SPEC.md) | Original project brief; read before changing architecture |
-| [docs/architecture.md](docs/architecture.md) | Upstream comparison, scope, provisioning and security decisions |
-| [docs/hardware.md](docs/hardware.md) | Camera reservations, display wiring and power questions |
-| [docs/providers.md](docs/providers.md) | Free/paid/self-hosted options and bilingual evaluation plan |
-| [docs/wall-e-reference.md](docs/wall-e-reference.md) | Findings from the additional project/installer |
-| [docs/next-steps.md](docs/next-steps.md) | Handoff and physical acceptance checklist |
-| `web/` | Shared English portal; no frontend framework needed |
-| `config/settings-schema.json` | Settings defaults and limits used to generate firmware schema |
-| `firmware/main/` | ESP-IDF commissioning, NVS, network, HTTP, DNS and display modules |
-| `lib/`, `tools/`, `tests/` | Desktop simulator, packaging and automated checks |
-
-Developer firmware stores credentials in NVS **without flash encryption**.
-The setup AP is WPA2 protected and its API is restricted to that interface;
-physical flash access can still reveal secrets. Do not commit real keys or
-passwords. Secure boot, encrypted storage, and scoped service tokens belong in
-the preparation for distributing finished devices.
+This developer firmware stores credentials in NVS without flash encryption. Use test credentials while developing, and do not commit passwords or API keys.
