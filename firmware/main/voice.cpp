@@ -206,8 +206,10 @@ static void OnMcp(const cJSON* payload) {
             auto* tool = cJSON_CreateObject();
             cJSON_AddStringToObject(tool, "name", "self.camera.take_photo");
             cJSON_AddStringToObject(tool, "description",
-                                    "You have a camera. When the user asks what you see, or about anything in front of "
-                                    "you, take a photo with this tool and answer from it.\nArgs:\n  `question`: what to "
+                                    "You have a camera. When the user asks what you see, asks you to look at something, or "
+                                    "holds something up, take a photo with this tool and answer from it. The photo is shown "
+                                    "on your screen while you talk about it. This also works while a live view is running: "
+                                    "that is how you tell the user what they are holding up.\nArgs:\n  `question`: what to "
                                     "look for in the photo.");
             auto* schema = cJSON_AddObjectToObject(tool, "inputSchema");
             cJSON_AddStringToObject(schema, "type", "object");
@@ -222,9 +224,11 @@ static void OnMcp(const cJSON* payload) {
             auto* tool = cJSON_CreateObject();
             cJSON_AddStringToObject(tool, "name", "self.camera.live_view");
             cJSON_AddStringToObject(tool, "description",
-                                    "Show a live camera feed full-screen for about 20 seconds. Call this when the "
-                                    "user asks for live video, a live feed, or to watch through the camera "
-                                    "continuously, rather than a single photo. Takes no arguments.");
+                                    "Show a live camera feed on your screen for about 20 seconds. Call this ONLY when the "
+                                    "user explicitly asks for live video, a live feed, or to watch through the camera "
+                                    "continuously; for a plain \"look at this\" use self.camera.take_photo. You cannot see "
+                                    "the live feed yourself: while it runs, use self.camera.take_photo whenever the user "
+                                    "asks what you see. Takes no arguments.");
             cJSON_AddStringToObject(cJSON_AddObjectToObject(tool, "inputSchema"), "type", "object");
             cJSON_AddItemToArray(tools, tool);
         }
@@ -274,7 +278,9 @@ static void OnMcp(const cJSON* payload) {
             SetDisplayCaption("Looking ...");
             if (xTaskCreate(PhotoTask, "photo", 8192, request, 4, nullptr) != pdPASS) { delete request; McpError(id, "Busy"); }
         } else if (name == "self.camera.live_view") {
-            McpText(id, StartLiveView() ? "Showing you a live view for a bit." : "Already showing a live view.");
+            McpText(id, StartLiveView() ? "The live view is on for about 20 seconds. You cannot see it yourself: when the "
+                                          "user asks what you see or holds something up, call self.camera.take_photo."
+                                        : "Already showing a live view.");
         } else if (name == "self.camera.stop_live_view") {
             McpText(id, StopLiveView() ? "Stopped the live view." : "No live view is running.");
         } else if (name == "self.speaker.set_volume") {
@@ -363,6 +369,7 @@ static void CloseSession(const char* why) {
     while (xQueueReceive(outbox, &pending, 0) == pdTRUE) delete pending.payload;
     SetExpression(Expression::Neutral);
     SetDisplayCaption("");
+    EndPhotoPreview();
     voice = Voice::Idle;
 }
 // A short rising two-tone chirp: "I heard you". Only called while nothing else plays.
@@ -472,6 +479,7 @@ static void VoiceTask(void*) {
         if (xEventGroupGetBits(ws_events) & kWsClosed) { CloseSession("server closed the connection"); continue; }
         if (now == Voice::Speaking && tts_done && pending_audio == 0) {
             vTaskDelay(pdMS_TO_TICKS(250));  // let the last DMA buffers play out before the mic listens again
+            EndPhotoPreview();
             tts_done = false;
             SendJson("listen", {{"state", "start"}, {"mode", "auto"}});
             SetExpression(Expression::Neutral);
